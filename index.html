@@ -1,0 +1,1327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>WME Timesheet</title>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --green:     #1D4A2A;
+      --green-lt:  #E8F0E9;
+      --green-mid: #3B6D11;
+      --gold:      #B8860B;
+      --gold-lt:   #FDF6E3;
+      --gray:      #F4F4F4;
+      --border:    #E0E0E0;
+      --text:      #1A1A1A;
+      --muted:     #666;
+      --white:     #fff;
+      --danger:    #C0392B;
+      --danger-lt: #FDECEC;
+      --amber-lt:  #FDF6E3;
+      --amber-tx:  #7A5000;
+      --blue-lt:   #EBF4FF;
+      --blue-tx:   #1A5C99;
+      --purple-lt: #F0EEFB;
+      --purple-tx: #4B3FA0;
+      --radius:    10px;
+      --radius-sm: 6px;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 15px;
+      color: var(--text);
+      background: #F0F2F0;
+      min-height: 100vh;
+    }
+
+    #app { max-width: 480px; margin: 0 auto; min-height: 100vh; background: var(--white); }
+
+    .screen { display: none; flex-direction: column; min-height: 100vh; }
+    .screen.active { display: flex; }
+
+    /* ── Header ── */
+    .hdr {
+      background: var(--green);
+      color: var(--white);
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .hdr-back { background: none; border: none; color: var(--white); font-size: 20px; cursor: pointer; padding: 0 4px; line-height: 1; opacity: .85; }
+    .hdr-back:hover { opacity: 1; }
+    .hdr-title { font-size: 16px; font-weight: 600; flex: 1; }
+    .hdr-sub { font-size: 12px; opacity: .7; margin-top: 1px; }
+
+    /* ── Body ── */
+    .body { padding: 16px; flex: 1; }
+
+    /* ── Auth ── */
+    .auth-wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 32px 24px; gap: 8px; }
+    .auth-logo { width: 160px; margin-bottom: 16px; }
+    .auth-logo img { width: 100%; height: auto; display: block; }
+    .auth-title { font-size: 22px; font-weight: 700; color: var(--green); }
+    .auth-sub { font-size: 14px; color: var(--muted); margin-bottom: 16px; }
+    .auth-form { width: 100%; display: flex; flex-direction: column; gap: 10px; }
+    .auth-form input { width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 15px; outline: none; }
+    .auth-form input:focus { border-color: var(--green); }
+
+    /* ── Buttons ── */
+    .btn { width: 100%; padding: 13px; border: none; border-radius: var(--radius-sm); font-size: 15px; font-weight: 600; cursor: pointer; transition: opacity .15s; }
+    .btn:active { opacity: .85; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-primary   { background: var(--green); color: var(--white); }
+    .btn-secondary { background: var(--green-lt); color: var(--green); }
+    .btn-outline   { background: none; border: 1.5px solid var(--green); color: var(--green); }
+    .btn-danger    { background: none; border: 1.5px solid var(--danger); color: var(--danger); }
+    .btn-sm        { padding: 8px 14px; font-size: 13px; width: auto; }
+
+    /* ── Cards ── */
+    .card { background: var(--white); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 12px; }
+    .card-title { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: .4px; }
+
+    /* ── Stats ── */
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+    .stat { background: var(--gray); border-radius: var(--radius-sm); padding: 12px; }
+    .stat-n { font-size: 24px; font-weight: 700; color: var(--green); line-height: 1; }
+    .stat-l { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+    /* ── Status badges ── */
+    .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; }
+    .badge-draft     { background: var(--blue-lt); color: var(--blue-tx); }
+    .badge-submitted { background: var(--amber-lt); color: var(--amber-tx); }
+    .badge-approved  { background: var(--green-lt); color: var(--green); }
+    .badge-rejected  { background: var(--danger-lt); color: var(--danger); }
+
+    /* ── Form fields ── */
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 13px; font-weight: 500; color: var(--muted); margin-bottom: 5px; }
+    .field input,
+    .field select,
+    .field textarea {
+      width: 100%; padding: 11px 13px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+      font-size: 15px; color: var(--text); background: var(--white); outline: none;
+      appearance: none; -webkit-appearance: none;
+    }
+    .field input:focus,
+    .field select:focus,
+    .field textarea:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(29,74,42,.1); }
+    .field textarea { resize: vertical; min-height: 70px; }
+    .field input[type="time"] { -webkit-appearance: none; appearance: none; }
+
+    /* ── Week grid ── */
+    .week-grid { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+    .week-day {
+      display: flex; align-items: center; padding: 12px 14px;
+      background: var(--gray); border-radius: var(--radius-sm);
+      cursor: pointer; transition: background .1s; gap: 10px;
+      border-left: 3px solid var(--border);
+    }
+    .week-day:active { background: var(--border); }
+    .week-day.has-entries { border-left-color: var(--green); }
+    .week-day-name { font-size: 13px; font-weight: 700; width: 36px; }
+    .week-day-date { font-size: 13px; color: var(--muted); flex: 1; }
+    .week-day-hours { font-size: 16px; font-weight: 700; color: var(--green); }
+    .week-day-hours.empty { color: var(--muted); font-weight: 400; font-size: 13px; }
+
+    /* ── Entry rows ── */
+    .entry-row {
+      background: var(--gray); border-radius: var(--radius-sm);
+      padding: 12px 14px; margin-bottom: 8px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .entry-info { flex: 1; }
+    .entry-project { font-size: 14px; font-weight: 500; }
+    .entry-times { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .entry-hours { font-size: 16px; font-weight: 700; color: var(--green); min-width: 50px; text-align: right; }
+    .entry-del { background: none; border: none; cursor: pointer; font-size: 18px; color: var(--muted); padding: 0 4px; line-height: 1; }
+    .entry-del:hover { color: var(--danger); }
+
+    /* ── Total bar ── */
+    .total-bar { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: var(--green-lt); border-radius: var(--radius-sm); margin-bottom: 14px; }
+    .total-bar-label { font-size: 13px; color: var(--green); font-weight: 500; }
+    .total-bar-val { font-size: 22px; font-weight: 700; color: var(--green); }
+
+    /* ── Confirm screen ── */
+    .confirm-wrap { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 24px 24px 16px; gap: 8px; }
+    .confirm-tick { width: 56px; height: 56px; background: var(--green-lt); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 8px; }
+    .confirm-tick svg { width: 28px; height: 28px; }
+    .confirm-sub { font-size: 13px; color: var(--muted); max-width: 260px; line-height: 1.5; }
+
+    /* ── Approval card ── */
+    .approval-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 12px; }
+    .approval-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .approval-name { font-size: 15px; font-weight: 600; }
+    .approval-meta { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+    .approval-days { font-size: 13px; color: var(--text); margin-bottom: 10px; line-height: 1.8; }
+    .approval-btns { display: flex; gap: 8px; }
+    .approval-btns .btn { flex: 1; }
+
+    /* ── History row ── */
+    .history-row { padding: 12px 0; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; cursor: pointer; }
+    .history-row:last-child { border-bottom: none; }
+    .history-row:active { background: var(--gray); margin: 0 -16px; padding: 12px 16px; }
+    .history-info { flex: 1; }
+    .history-week { font-size: 14px; font-weight: 500; }
+    .history-hours { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+    /* ── Admin segments ── */
+    .seg { display: flex; gap: 0; margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+    .seg-btn { flex: 1; padding: 10px 8px; border: none; background: var(--white); font-size: 13px; font-weight: 500; cursor: pointer; color: var(--muted); border-right: 1px solid var(--border); }
+    .seg-btn:last-child { border-right: none; }
+    .seg-btn.active { background: var(--green); color: var(--white); }
+
+    /* ── Employee list row ── */
+    .emp-row { padding: 12px 0; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+    .emp-row:last-child { border-bottom: none; }
+    .emp-info { flex: 1; }
+    .emp-name { font-size: 14px; font-weight: 500; }
+    .emp-detail { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .emp-rate { font-size: 14px; font-weight: 600; color: var(--green); min-width: 60px; text-align: right; }
+
+    /* ── Nav ── */
+    .nav { display: flex; border-top: 1px solid var(--border); background: var(--white); position: sticky; bottom: 0; z-index: 10; }
+    .nav-tab { flex: 1; padding: 10px 4px 12px; border: none; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10px; color: var(--muted); font-weight: 500; }
+    .nav-tab.active { color: var(--green); }
+    .nav-tab svg { width: 20px; height: 20px; }
+
+    /* ── Toast ── */
+    .toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--white); padding: 10px 18px; border-radius: 20px; font-size: 13px; font-weight: 500; opacity: 0; transition: opacity .2s; pointer-events: none; white-space: nowrap; z-index: 200; }
+    .toast.show { opacity: 1; }
+
+    /* ── Misc ── */
+    .loading { text-align: center; padding: 32px; color: var(--muted); font-size: 14px; }
+    .empty { text-align: center; padding: 40px 24px; color: var(--muted); }
+    .empty-icon { font-size: 32px; margin-bottom: 8px; }
+    .empty p { font-size: 14px; }
+    .divider { height: 1px; background: var(--border); margin: 8px 0 16px; }
+    .setup-banner { background: var(--amber-lt); border: 1px solid #E6B800; border-radius: var(--radius-sm); padding: 12px 14px; font-size: 13px; color: var(--amber-tx); margin-bottom: 16px; line-height: 1.5; }
+    .setup-banner strong { display: block; margin-bottom: 4px; }
+    .info-box { background: var(--green-lt); border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 14px; font-size: 13px; color: var(--green); }
+    .info-box strong { display: block; margin-bottom: 3px; }
+    .reject-input { margin-top: 8px; display: none; }
+    .reject-input.show { display: block; }
+
+    @media (prefers-color-scheme: dark) {
+      body { background: #111; }
+      #app { background: #1A1A1A; }
+      .hdr { background: #0D2B17; }
+      :root {
+        --text: #F0F0F0; --muted: #999; --white: #1A1A1A; --gray: #252525;
+        --border: #333; --green-lt: #0D2B17; --amber-lt: #2A2000; --amber-tx: #E6B800;
+        --blue-lt: #001A2E; --blue-tx: #7AB8F5; --danger-lt: #2A0808;
+        --purple-lt: #1A1530; --purple-tx: #9B93E8;
+      }
+      .confirm-tick { background: #0D2B17; }
+      .stat { background: #252525; }
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ═══════════════════ AUTH ═══════════════════ -->
+  <div id="scr-auth" class="screen active">
+    <div class="auth-wrap">
+      <div class="auth-logo"><img src="wme-logo.jpg" alt="WME" onerror="this.style.display='none'" /></div>
+      <div class="auth-title">WME Timesheet</div>
+      <div class="auth-sub">Watford ME Ltd</div>
+      <div class="auth-form">
+        <input id="auth-email" type="email" placeholder="Email" autocomplete="email" />
+        <input id="auth-pass" type="password" placeholder="Password" autocomplete="current-password" />
+        <button class="btn btn-primary" onclick="signIn()">Sign in</button>
+        <button class="btn btn-secondary" onclick="signUp()">Create account</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ DASHBOARD ═══════════════════ -->
+  <div id="scr-dash" class="screen">
+    <div class="hdr">
+      <div style="flex:1">
+        <div class="hdr-title">WME Timesheet</div>
+        <div class="hdr-sub" id="dash-user"></div>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="signOut()" style="opacity:.9">Sign out</button>
+    </div>
+    <div class="body">
+      <div class="stats">
+        <div class="stat"><div class="stat-n" id="stat-hours">0</div><div class="stat-l">Hours this week</div></div>
+        <div class="stat"><div class="stat-n" id="stat-status">Draft</div><div class="stat-l">Week status</div></div>
+        <div class="stat"><div class="stat-n" id="stat-pending">0</div><div class="stat-l" id="stat-pending-label">Pending approval</div></div>
+        <div class="stat"><div class="stat-n" id="stat-week">—</div><div class="stat-l">Current week</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title" id="dash-week-label">This Week</div>
+        <div class="week-grid" id="dash-week-grid"></div>
+        <div class="total-bar">
+          <span class="total-bar-label">Week Total</span>
+          <span class="total-bar-val" id="dash-week-total">0 hrs</span>
+        </div>
+        <button class="btn btn-primary" id="dash-submit-btn" onclick="submitTimesheet()" disabled>Submit Timesheet</button>
+      </div>
+    </div>
+    <nav class="nav">
+      <button class="nav-tab active" id="nav-home" onclick="showScreen('scr-dash')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1h-2z"/></svg>
+        Home
+      </button>
+      <button class="nav-tab" id="nav-log" onclick="openLogDay()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l2 2"/></svg>
+        Log
+      </button>
+      <button class="nav-tab" id="nav-week" onclick="showScreen('scr-week')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        Week
+      </button>
+      <button class="nav-tab" id="nav-history" onclick="showScreen('scr-history')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        History
+      </button>
+      <button class="nav-tab" id="nav-admin" onclick="showScreen('scr-admin')" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+        Admin
+      </button>
+    </nav>
+  </div>
+
+  <!-- ═══════════════════ LOG DAY ═══════════════════ -->
+  <div id="scr-log-day" class="screen">
+    <div class="hdr">
+      <button class="hdr-back" onclick="showScreen('scr-dash')">&#8592;</button>
+      <button class="hdr-back" onclick="prevDay()" style="font-size:16px">&#9664;</button>
+      <div class="hdr-title" id="log-day-title">Monday</div>
+      <button class="hdr-back" onclick="nextDay()" style="font-size:16px">&#9654;</button>
+    </div>
+    <div class="body">
+      <div id="day-entries"></div>
+      <div class="total-bar" id="day-total-bar" style="display:none">
+        <span class="total-bar-label">Day Total</span>
+        <span class="total-bar-val" id="day-total">0 hrs</span>
+      </div>
+
+      <div class="card" id="day-entry-form">
+        <div class="card-title">Add Entry</div>
+        <div class="field">
+          <label>Project</label>
+          <select id="entry-project"><option value="">Select project...</option></select>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div class="field">
+            <label>Start</label>
+            <input type="time" id="entry-start" value="07:00" />
+          </div>
+          <div class="field">
+            <label>End</label>
+            <input type="time" id="entry-end" value="16:30" />
+          </div>
+        </div>
+        <div class="field">
+          <label>Break (minutes)</label>
+          <input type="number" id="entry-break" value="30" min="0" step="5" />
+        </div>
+        <div class="total-bar" style="margin-bottom:14px">
+          <span class="total-bar-label">Hours</span>
+          <span class="total-bar-val" id="entry-calc-hours">9.0</span>
+        </div>
+        <div class="field">
+          <label>Notes (optional)</label>
+          <input type="text" id="entry-notes" placeholder="e.g. First fix, 2nd floor" />
+        </div>
+        <button class="btn btn-primary" onclick="saveTimeEntry()">Save Entry</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ WEEK VIEW ═══════════════════ -->
+  <div id="scr-week" class="screen">
+    <div class="hdr">
+      <button class="hdr-back" onclick="showScreen('scr-dash')">&#8592;</button>
+      <button class="hdr-back" onclick="prevWeek()" style="font-size:16px">&#9664;</button>
+      <div class="hdr-title" id="week-title">Week View</div>
+      <button class="hdr-back" onclick="nextWeek()" style="font-size:16px">&#9654;</button>
+    </div>
+    <div class="body">
+      <div id="week-status-banner"></div>
+      <div class="week-grid" id="week-grid"></div>
+      <div class="total-bar">
+        <span class="total-bar-label">Week Total</span>
+        <span class="total-bar-val" id="week-total">0 hrs</span>
+      </div>
+      <button class="btn btn-primary" id="week-submit-btn" onclick="submitTimesheet()" style="display:none">Submit Timesheet</button>
+    </div>
+    <nav class="nav">
+      <button class="nav-tab" onclick="showScreen('scr-dash')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1h-2z"/></svg>Home</button>
+      <button class="nav-tab" onclick="openLogDay()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l2 2"/></svg>Log</button>
+      <button class="nav-tab active" onclick="showScreen('scr-week')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Week</button>
+      <button class="nav-tab" onclick="showScreen('scr-history')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>History</button>
+      <button class="nav-tab" id="nav-admin-week" onclick="showScreen('scr-admin')" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>Admin</button>
+    </nav>
+  </div>
+
+  <!-- ═══════════════════ SUBMIT CONFIRM ═══════════════════ -->
+  <div id="scr-submit" class="screen">
+    <div class="hdr">
+      <div class="hdr-title" style="text-align:center">Submitted</div>
+    </div>
+    <div class="body">
+      <div class="confirm-wrap">
+        <div class="confirm-tick">
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <div style="font-size:20px;font-weight:700;color:var(--green)">Timesheet Submitted</div>
+        <div class="confirm-sub" id="submit-summary"></div>
+        <div style="margin-top:16px;font-size:13px;color:var(--muted)">Awaiting manager approval</div>
+      </div>
+      <button class="btn btn-primary" onclick="showScreen('scr-dash')" style="margin-top:16px">Back to Dashboard</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ HISTORY ═══════════════════ -->
+  <div id="scr-history" class="screen">
+    <div class="hdr">
+      <button class="hdr-back" onclick="showScreen('scr-dash')">&#8592;</button>
+      <div class="hdr-title">Timesheet History</div>
+    </div>
+    <div class="body">
+      <div id="history-list"></div>
+    </div>
+    <nav class="nav">
+      <button class="nav-tab" onclick="showScreen('scr-dash')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1h-2z"/></svg>Home</button>
+      <button class="nav-tab" onclick="openLogDay()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l2 2"/></svg>Log</button>
+      <button class="nav-tab" onclick="showScreen('scr-week')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Week</button>
+      <button class="nav-tab active" onclick="showScreen('scr-history')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>History</button>
+      <button class="nav-tab" id="nav-admin-hist" onclick="showScreen('scr-admin')" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>Admin</button>
+    </nav>
+  </div>
+
+  <!-- ═══════════════════ APPROVALS ═══════════════════ -->
+  <div id="scr-approve" class="screen">
+    <div class="hdr">
+      <button class="hdr-back" onclick="showScreen('scr-admin')">&#8592;</button>
+      <div class="hdr-title">Approve Timesheets</div>
+    </div>
+    <div class="body">
+      <div id="approve-list"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ ADMIN ═══════════════════ -->
+  <div id="scr-admin" class="screen">
+    <div class="hdr">
+      <button class="hdr-back" onclick="showScreen('scr-dash')">&#8592;</button>
+      <div class="hdr-title">Admin</div>
+    </div>
+    <div class="body">
+      <div class="seg">
+        <button class="seg-btn active" onclick="showAdminPanel('employees')">Employees</button>
+        <button class="seg-btn" onclick="showAdminPanel('approvals')">Approvals</button>
+        <button class="seg-btn" onclick="showAdminPanel('reports')">Reports</button>
+      </div>
+
+      <!-- Employees panel -->
+      <div id="admin-employees">
+        <div class="card">
+          <div class="card-title">Add Employee</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="field"><label>First Name</label><input id="emp-first" /></div>
+            <div class="field"><label>Last Name</label><input id="emp-last" /></div>
+          </div>
+          <div class="field"><label>Email</label><input id="emp-email" type="email" placeholder="Optional — links to login" /></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="field">
+              <label>Role</label>
+              <select id="emp-role">
+                <option value="operative">Operative</option>
+                <option value="office">Office</option>
+                <option value="manager">Manager</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Employment</label>
+              <select id="emp-employment">
+                <option value="employed">Employed</option>
+                <option value="subcontractor">Subcontractor</option>
+                <option value="agency">Agency</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="field">
+              <label>Rate Type</label>
+              <select id="emp-ratetype">
+                <option value="hourly">Hourly</option>
+                <option value="daily">Daily</option>
+                <option value="salary">Salary</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Rate (£)</label>
+              <input id="emp-rate" type="number" step="0.01" value="0" />
+            </div>
+          </div>
+          <button class="btn btn-primary" onclick="addEmployee()">Add Employee</button>
+        </div>
+        <div class="card-title">Current Employees</div>
+        <div id="emp-list"></div>
+      </div>
+
+      <!-- Approvals panel -->
+      <div id="admin-approvals" style="display:none">
+        <button class="btn btn-primary" onclick="loadApprovals(); showScreen('scr-approve')" style="margin-bottom:16px">View Submitted Timesheets</button>
+        <div id="recent-approvals"></div>
+      </div>
+
+      <!-- Reports panel -->
+      <div id="admin-reports" style="display:none">
+        <div class="info-box">
+          <strong>Coming soon</strong>
+          CSV export of hours by project, employee, and week.
+        </div>
+      </div>
+    </div>
+    <nav class="nav">
+      <button class="nav-tab" onclick="showScreen('scr-dash')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1h-2z"/></svg>Home</button>
+      <button class="nav-tab" onclick="openLogDay()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l2 2"/></svg>Log</button>
+      <button class="nav-tab" onclick="showScreen('scr-week')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Week</button>
+      <button class="nav-tab" onclick="showScreen('scr-history')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>History</button>
+      <button class="nav-tab active" onclick="showScreen('scr-admin')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>Admin</button>
+    </nav>
+  </div>
+
+  <!-- ═══════════════════ NO EMPLOYEE SCREEN ═══════════════════ -->
+  <div id="scr-no-employee" class="screen">
+    <div class="hdr">
+      <div class="hdr-title">WME Timesheet</div>
+    </div>
+    <div class="body">
+      <div class="empty">
+        <div class="empty-icon">&#128274;</div>
+        <p><strong>Account not set up</strong></p>
+        <p style="margin-top:8px">Your login email is not linked to an employee record. Contact your admin to get set up.</p>
+      </div>
+      <button class="btn btn-secondary" onclick="signOut()" style="margin-top:24px">Sign out</button>
+    </div>
+  </div>
+
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+// ── CONFIG ───────────────────────────────────────────────────
+const SUPABASE_URL  = 'https://zzajwyyhyioaqtyyislc.supabase.co';
+const SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp6YWp3eXloeWlvYXF0eXlpc2xjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3MDgwMDgsImV4cCI6MjA5MDI4NDAwOH0.06WD2smItfsWJYri8Xs0pdSAqqQJLohS5kCQtnfITQY';
+const ADMIN_EMAIL   = 'jamesculloty@watfordme.co.uk';
+
+// ── STATE ────────────────────────────────────────────────────
+let sb, currentUser, currentEmployee;
+let selectedDate = new Date();
+let currentWeekStart = getMonday(new Date());
+let projects = [];
+
+// ── INIT ─────────────────────────────────────────────────────
+function initSupabase() {
+  if (typeof supabase === 'undefined') return false;
+  sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  return true;
+}
+
+// ── SCREEN ROUTING ───────────────────────────────────────────
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  const scr = document.getElementById(id);
+  if (scr) scr.classList.add('active');
+  window.scrollTo(0, 0);
+
+  // Update nav highlights on screens that have nav
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  if (id === 'scr-dash')    document.querySelectorAll('#nav-home').forEach(t => t.classList.add('active'));
+  if (id === 'scr-week')    document.querySelectorAll('[onclick*="scr-week"]').forEach(t => { if (t.classList.contains('nav-tab')) t.classList.add('active'); });
+  if (id === 'scr-history') document.querySelectorAll('[onclick*="scr-history"]').forEach(t => { if (t.classList.contains('nav-tab')) t.classList.add('active'); });
+  if (id === 'scr-admin')   document.querySelectorAll('[onclick*="scr-admin"]').forEach(t => { if (t.classList.contains('nav-tab')) t.classList.add('active'); });
+
+  // Load data when switching to screens
+  if (id === 'scr-dash')    loadDashboard();
+  if (id === 'scr-week')    loadWeekView();
+  if (id === 'scr-history') loadHistory();
+  if (id === 'scr-admin')   loadAdmin();
+}
+
+// ── TOAST ────────────────────────────────────────────────────
+function toast(msg, dur = 2500) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), dur);
+}
+
+// ── ESCAPE HTML ──────────────────────────────────────────────
+function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+// ── AUTH ─────────────────────────────────────────────────────
+async function signIn() {
+  const email = document.getElementById('auth-email').value.trim();
+  const pass  = document.getElementById('auth-pass').value;
+  if (!email || !pass) return toast('Enter email and password');
+  const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
+  if (error) return toast(error.message, 4000);
+  currentUser = data.user;
+  afterAuth();
+}
+
+async function signUp() {
+  const email = document.getElementById('auth-email').value.trim();
+  const pass  = document.getElementById('auth-pass').value;
+  if (!email || !pass) return toast('Enter email and password');
+  const { error } = await sb.auth.signUp({ email, password: pass });
+  if (error) return toast(error.message, 4000);
+  toast('Check your email to confirm your account', 4000);
+}
+
+async function signOut() {
+  await sb.auth.signOut();
+  currentUser = null;
+  currentEmployee = null;
+  showScreen('scr-auth');
+}
+
+async function afterAuth() {
+  document.getElementById('dash-user').textContent = currentUser.email;
+
+  // Load employee record
+  const { data: emp } = await sb.from('employees')
+    .select('*')
+    .eq('auth_email', currentUser.email)
+    .eq('active', true)
+    .single();
+
+  if (!emp) {
+    // Check if admin email — auto-create if needed
+    if (currentUser.email === ADMIN_EMAIL) {
+      // Try to find even inactive record, or show no-employee
+      showScreen('scr-no-employee');
+      return;
+    }
+    showScreen('scr-no-employee');
+    return;
+  }
+
+  currentEmployee = emp;
+  showAdminTabs();
+  await loadProjects();
+  await loadDashboard();
+  showScreen('scr-dash');
+}
+
+// ── ADMIN TAB VISIBILITY ────────────────────────────────────
+function isAdmin() { return currentUser && (currentUser.email === ADMIN_EMAIL || (currentEmployee && currentEmployee.role === 'admin')); }
+function isManager() { return isAdmin() || (currentEmployee && currentEmployee.role === 'manager'); }
+
+function showAdminTabs() {
+  const show = isManager();
+  document.getElementById('nav-admin').style.display = show ? '' : 'none';
+  const wa = document.getElementById('nav-admin-week');
+  if (wa) wa.style.display = show ? '' : 'none';
+  const ha = document.getElementById('nav-admin-hist');
+  if (ha) ha.style.display = show ? '' : 'none';
+}
+
+// ── LOAD PROJECTS ───────────────────────────────────────────
+async function loadProjects() {
+  const { data } = await sb.from('projects').select('name, status').order('name');
+  projects = (data || []).filter(p => p.status === 'Active');
+  populateProjectSelects();
+}
+
+function populateProjectSelects() {
+  const sel = document.getElementById('entry-project');
+  sel.innerHTML = '<option value="">Select project...</option>';
+  projects.forEach(p => {
+    sel.innerHTML += `<option value="${esc(p.name)}">${esc(p.name)}</option>`;
+  });
+}
+
+// ── DATE HELPERS ─────────────────────────────────────────────
+function getMonday(d) {
+  const date = new Date(d);
+  const day = date.getDay();
+  const diff = date.getDate() - day + (day === 0 ? -6 : 1);
+  date.setDate(diff);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function getWeekDates(monday) {
+  const dates = [];
+  for (let i = 0; i < 5; i++) {
+    const d = new Date(monday);
+    d.setDate(d.getDate() + i);
+    dates.push(d);
+  }
+  return dates;
+}
+
+function isoDate(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+function formatDate(d) {
+  return d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function formatDateShort(d) {
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+}
+
+function formatWeekRange(monday) {
+  const fri = new Date(monday);
+  fri.setDate(fri.getDate() + 4);
+  return formatDateShort(monday) + ' \u2013 ' + formatDateShort(fri);
+}
+
+const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+
+// ── TIME CALCULATION ─────────────────────────────────────────
+function calcHours(startStr, endStr, breakMins) {
+  const [sh, sm] = startStr.split(':').map(Number);
+  const [eh, em] = endStr.split(':').map(Number);
+  const startMins = sh * 60 + sm;
+  const endMins = eh * 60 + em;
+  if (endMins <= startMins) return 0;
+  const worked = (endMins - startMins - breakMins) / 60;
+  return Math.max(0, Math.round(worked * 100) / 100);
+}
+
+// Live calculation on entry form
+function updateEntryCalc() {
+  const start = document.getElementById('entry-start').value;
+  const end   = document.getElementById('entry-end').value;
+  const brk   = parseInt(document.getElementById('entry-break').value) || 0;
+  const hours = calcHours(start, end, brk);
+  document.getElementById('entry-calc-hours').textContent = hours.toFixed(1);
+}
+
+// ── DASHBOARD ────────────────────────────────────────────────
+async function loadDashboard() {
+  if (!currentEmployee) return;
+  const monday = getMonday(new Date());
+  currentWeekStart = monday;
+  const friday = new Date(monday);
+  friday.setDate(friday.getDate() + 4);
+
+  // Load entries for this week
+  const { data: entries } = await sb.from('time_entries')
+    .select('*')
+    .eq('employee_id', currentEmployee.id)
+    .gte('entry_date', isoDate(monday))
+    .lte('entry_date', isoDate(friday))
+    .order('entry_date')
+    .order('start_time');
+
+  // Load timesheet record for this week
+  const { data: ts } = await sb.from('timesheets')
+    .select('*')
+    .eq('employee_id', currentEmployee.id)
+    .eq('week_starting', isoDate(monday))
+    .single();
+
+  const weekEntries = entries || [];
+  const totalHours = weekEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
+  const status = ts ? ts.status : 'Draft';
+
+  // Stats
+  document.getElementById('stat-hours').textContent = totalHours.toFixed(1);
+  document.getElementById('stat-status').textContent = status;
+  document.getElementById('stat-status').style.fontSize = '16px';
+  document.getElementById('stat-week').textContent = formatWeekRange(monday);
+  document.getElementById('stat-week').style.fontSize = '13px';
+
+  // Pending approvals (managers only)
+  if (isManager()) {
+    const { count } = await sb.from('timesheets')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'Submitted');
+    document.getElementById('stat-pending').textContent = count || 0;
+    document.getElementById('stat-pending-label').textContent = 'Pending approval';
+  } else {
+    document.getElementById('stat-pending').textContent = weekEntries.length;
+    document.getElementById('stat-pending-label').textContent = 'Entries this week';
+  }
+
+  // Week grid
+  const grid = document.getElementById('dash-week-grid');
+  const dates = getWeekDates(monday);
+  grid.innerHTML = '';
+  dates.forEach((d, i) => {
+    const dayEntries = weekEntries.filter(e => e.entry_date === isoDate(d));
+    const dayHours = dayEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
+    const hasEntries = dayEntries.length > 0;
+    grid.innerHTML += `
+      <div class="week-day ${hasEntries ? 'has-entries' : ''}" onclick="openLogDay('${isoDate(d)}')">
+        <span class="week-day-name">${DAY_NAMES[i]}</span>
+        <span class="week-day-date">${formatDateShort(d)}</span>
+        <span class="week-day-hours ${hasEntries ? '' : 'empty'}">${hasEntries ? dayHours.toFixed(1) + 'h' : '—'}</span>
+      </div>`;
+  });
+
+  // Week label and total
+  document.getElementById('dash-week-label').textContent = 'Week: ' + formatWeekRange(monday);
+  document.getElementById('dash-week-total').textContent = totalHours.toFixed(1) + ' hrs';
+
+  // Submit button
+  const submitBtn = document.getElementById('dash-submit-btn');
+  if (status === 'Draft' && weekEntries.length > 0) {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Submit Timesheet';
+    submitBtn.style.display = '';
+  } else if (status === 'Submitted') {
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitted — Awaiting Approval';
+    submitBtn.style.display = '';
+  } else if (status === 'Approved') {
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Approved ✓';
+    submitBtn.style.display = '';
+  } else if (status === 'Rejected') {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Resubmit Timesheet';
+    submitBtn.style.display = '';
+  } else {
+    submitBtn.style.display = 'none';
+  }
+}
+
+// ── LOG DAY ──────────────────────────────────────────────────
+function openLogDay(dateStr) {
+  if (dateStr) {
+    selectedDate = new Date(dateStr + 'T00:00:00');
+  } else {
+    selectedDate = new Date();
+  }
+  loadDayView();
+  showScreen('scr-log-day');
+}
+
+function prevDay() {
+  selectedDate.setDate(selectedDate.getDate() - 1);
+  // Skip weekends
+  if (selectedDate.getDay() === 0) selectedDate.setDate(selectedDate.getDate() - 2);
+  if (selectedDate.getDay() === 6) selectedDate.setDate(selectedDate.getDate() - 1);
+  loadDayView();
+}
+
+function nextDay() {
+  selectedDate.setDate(selectedDate.getDate() + 1);
+  // Skip weekends
+  if (selectedDate.getDay() === 0) selectedDate.setDate(selectedDate.getDate() + 1);
+  if (selectedDate.getDay() === 6) selectedDate.setDate(selectedDate.getDate() + 1);
+  loadDayView();
+}
+
+async function loadDayView() {
+  document.getElementById('log-day-title').textContent = formatDate(selectedDate);
+
+  // Check if this week's timesheet is submitted/approved
+  const monday = getMonday(selectedDate);
+  const { data: ts } = await sb.from('timesheets')
+    .select('status')
+    .eq('employee_id', currentEmployee.id)
+    .eq('week_starting', isoDate(monday))
+    .single();
+
+  const locked = ts && (ts.status === 'Submitted' || ts.status === 'Approved');
+  const form = document.getElementById('day-entry-form');
+  form.style.display = locked ? 'none' : '';
+
+  // Load entries
+  const { data: entries } = await sb.from('time_entries')
+    .select('*')
+    .eq('employee_id', currentEmployee.id)
+    .eq('entry_date', isoDate(selectedDate))
+    .order('start_time');
+
+  const container = document.getElementById('day-entries');
+  const dayEntries = entries || [];
+
+  if (dayEntries.length === 0) {
+    container.innerHTML = '<div class="empty"><div class="empty-icon">📋</div><p>No entries for this day</p></div>';
+    document.getElementById('day-total-bar').style.display = 'none';
+  } else {
+    let html = '';
+    let totalHours = 0;
+    dayEntries.forEach(e => {
+      const hours = parseFloat(e.calculated_hours || 0);
+      totalHours += hours;
+      html += `
+        <div class="entry-row">
+          <div class="entry-info">
+            <div class="entry-project">${esc(e.project_name)}</div>
+            <div class="entry-times">${e.start_time.slice(0,5)} – ${e.end_time.slice(0,5)} (${e.break_minutes}min break)${e.notes ? ' · ' + esc(e.notes) : ''}</div>
+          </div>
+          <div class="entry-hours">${hours.toFixed(1)}h</div>
+          ${locked ? '' : `<button class="entry-del" onclick="deleteTimeEntry('${e.id}')" title="Delete">×</button>`}
+        </div>`;
+    });
+    container.innerHTML = html;
+    document.getElementById('day-total-bar').style.display = '';
+    document.getElementById('day-total').textContent = totalHours.toFixed(1) + ' hrs';
+  }
+
+  // Reset form
+  document.getElementById('entry-project').value = '';
+  document.getElementById('entry-start').value = '07:00';
+  document.getElementById('entry-end').value = '16:30';
+  document.getElementById('entry-break').value = '30';
+  document.getElementById('entry-notes').value = '';
+  updateEntryCalc();
+}
+
+// ── SAVE TIME ENTRY ──────────────────────────────────────────
+async function saveTimeEntry() {
+  const project = document.getElementById('entry-project').value;
+  const start   = document.getElementById('entry-start').value;
+  const end     = document.getElementById('entry-end').value;
+  const brk     = parseInt(document.getElementById('entry-break').value) || 0;
+  const notes   = document.getElementById('entry-notes').value.trim();
+
+  if (!project) return toast('Select a project');
+  if (!start || !end) return toast('Enter start and end times');
+  if (end <= start) return toast('End time must be after start time');
+  if (brk < 0) return toast('Break cannot be negative');
+
+  const hours = calcHours(start, end, brk);
+  if (hours <= 0) return toast('No working hours — check break time');
+
+  const { error } = await sb.from('time_entries').insert({
+    employee_id: currentEmployee.id,
+    project_name: project,
+    entry_date: isoDate(selectedDate),
+    start_time: start,
+    end_time: end,
+    break_minutes: brk,
+    notes: notes || null
+  });
+
+  if (error) return toast('Error: ' + error.message, 4000);
+
+  // Reset timesheet to Draft if it was Rejected
+  const monday = getMonday(selectedDate);
+  await sb.from('timesheets')
+    .update({ status: 'Draft', submitted_at: null, rejection_reason: null })
+    .eq('employee_id', currentEmployee.id)
+    .eq('week_starting', isoDate(monday))
+    .eq('status', 'Rejected');
+
+  toast('Entry saved');
+  loadDayView();
+}
+
+// ── DELETE TIME ENTRY ────────────────────────────────────────
+async function deleteTimeEntry(id) {
+  const { error } = await sb.from('time_entries').delete().eq('id', id);
+  if (error) return toast('Error: ' + error.message, 4000);
+  toast('Entry deleted');
+  loadDayView();
+}
+
+// ── WEEK VIEW ────────────────────────────────────────────────
+function prevWeek() {
+  currentWeekStart.setDate(currentWeekStart.getDate() - 7);
+  loadWeekView();
+}
+
+function nextWeek() {
+  currentWeekStart.setDate(currentWeekStart.getDate() + 7);
+  loadWeekView();
+}
+
+async function loadWeekView() {
+  const monday = currentWeekStart;
+  const friday = new Date(monday);
+  friday.setDate(friday.getDate() + 4);
+
+  document.getElementById('week-title').textContent = formatWeekRange(monday);
+
+  // Load entries
+  const { data: entries } = await sb.from('time_entries')
+    .select('*')
+    .eq('employee_id', currentEmployee.id)
+    .gte('entry_date', isoDate(monday))
+    .lte('entry_date', isoDate(friday))
+    .order('entry_date')
+    .order('start_time');
+
+  // Load timesheet
+  const { data: ts } = await sb.from('timesheets')
+    .select('*')
+    .eq('employee_id', currentEmployee.id)
+    .eq('week_starting', isoDate(monday))
+    .single();
+
+  const weekEntries = entries || [];
+  const status = ts ? ts.status : 'Draft';
+
+  // Status banner
+  const banner = document.getElementById('week-status-banner');
+  if (status === 'Submitted') {
+    banner.innerHTML = '<div class="info-box"><strong>Submitted</strong>Awaiting manager approval.</div>';
+  } else if (status === 'Approved') {
+    banner.innerHTML = '<div class="info-box" style="background:var(--green-lt);color:var(--green)"><strong>Approved ✓</strong>This timesheet has been approved.</div>';
+  } else if (status === 'Rejected') {
+    const reason = ts.rejection_reason ? esc(ts.rejection_reason) : 'No reason given';
+    banner.innerHTML = `<div class="setup-banner"><strong>Rejected</strong>${reason}<br>Edit your entries and resubmit.</div>`;
+  } else {
+    banner.innerHTML = '';
+  }
+
+  // Week grid with entries detail
+  const grid = document.getElementById('week-grid');
+  const dates = getWeekDates(monday);
+  let totalHours = 0;
+  grid.innerHTML = '';
+
+  dates.forEach((d, i) => {
+    const dayEntries = weekEntries.filter(e => e.entry_date === isoDate(d));
+    const dayHours = dayEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
+    totalHours += dayHours;
+    const hasEntries = dayEntries.length > 0;
+
+    let entriesHtml = '';
+    if (hasEntries) {
+      dayEntries.forEach(e => {
+        entriesHtml += `<div style="font-size:12px;color:var(--muted);padding:2px 0 2px 46px">${esc(e.project_name)} · ${e.start_time.slice(0,5)}–${e.end_time.slice(0,5)} · ${parseFloat(e.calculated_hours).toFixed(1)}h</div>`;
+      });
+    }
+
+    grid.innerHTML += `
+      <div>
+        <div class="week-day ${hasEntries ? 'has-entries' : ''}" onclick="openLogDay('${isoDate(d)}')">
+          <span class="week-day-name">${DAY_NAMES[i]}</span>
+          <span class="week-day-date">${formatDateShort(d)}</span>
+          <span class="week-day-hours ${hasEntries ? '' : 'empty'}">${hasEntries ? dayHours.toFixed(1) + 'h' : '—'}</span>
+        </div>
+        ${entriesHtml}
+      </div>`;
+  });
+
+  document.getElementById('week-total').textContent = totalHours.toFixed(1) + ' hrs';
+
+  // Submit button
+  const submitBtn = document.getElementById('week-submit-btn');
+  if ((status === 'Draft' || status === 'Rejected') && weekEntries.length > 0) {
+    submitBtn.style.display = '';
+    submitBtn.disabled = false;
+    submitBtn.textContent = status === 'Rejected' ? 'Resubmit Timesheet' : 'Submit Timesheet';
+  } else {
+    submitBtn.style.display = 'none';
+  }
+}
+
+// ── SUBMIT TIMESHEET ─────────────────────────────────────────
+async function submitTimesheet() {
+  const monday = getMonday(new Date());
+  const friday = new Date(monday);
+  friday.setDate(friday.getDate() + 4);
+
+  // Calculate totals
+  const { data: entries } = await sb.from('time_entries')
+    .select('calculated_hours, entry_date')
+    .eq('employee_id', currentEmployee.id)
+    .gte('entry_date', isoDate(monday))
+    .lte('entry_date', isoDate(friday));
+
+  const weekEntries = entries || [];
+  if (weekEntries.length === 0) return toast('No entries to submit');
+
+  const totalHours = weekEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
+
+  // Calculate cost
+  let totalCost = 0;
+  if (currentEmployee.rate_type === 'hourly') {
+    totalCost = totalHours * parseFloat(currentEmployee.rate);
+  } else if (currentEmployee.rate_type === 'daily') {
+    const uniqueDays = new Set(weekEntries.map(e => e.entry_date)).size;
+    totalCost = uniqueDays * parseFloat(currentEmployee.rate);
+  } else if (currentEmployee.rate_type === 'salary') {
+    totalCost = parseFloat(currentEmployee.rate) / 52;
+  }
+
+  // Upsert timesheet
+  const { error } = await sb.from('timesheets').upsert({
+    employee_id: currentEmployee.id,
+    week_starting: isoDate(monday),
+    status: 'Submitted',
+    total_hours: totalHours,
+    total_cost: Math.round(totalCost * 100) / 100,
+    submitted_at: new Date().toISOString()
+  }, { onConflict: 'employee_id,week_starting' });
+
+  if (error) return toast('Error: ' + error.message, 4000);
+
+  // Show confirmation
+  document.getElementById('submit-summary').textContent =
+    formatWeekRange(monday) + ' · ' + totalHours.toFixed(1) + ' hours';
+  showScreen('scr-submit');
+}
+
+// ── HISTORY ──────────────────────────────────────────────────
+async function loadHistory() {
+  if (!currentEmployee) return;
+  const { data: sheets } = await sb.from('timesheets')
+    .select('*')
+    .eq('employee_id', currentEmployee.id)
+    .order('week_starting', { ascending: false })
+    .limit(26);
+
+  const container = document.getElementById('history-list');
+  if (!sheets || sheets.length === 0) {
+    container.innerHTML = '<div class="empty"><div class="empty-icon">📅</div><p>No timesheet history yet</p></div>';
+    return;
+  }
+
+  let html = '';
+  sheets.forEach(ts => {
+    const monday = new Date(ts.week_starting + 'T00:00:00');
+    const statusClass = ts.status.toLowerCase();
+    html += `
+      <div class="history-row" onclick="viewHistoryWeek('${ts.week_starting}')">
+        <div class="history-info">
+          <div class="history-week">${formatWeekRange(monday)}</div>
+          <div class="history-hours">${parseFloat(ts.total_hours).toFixed(1)} hours${ts.rejection_reason ? ' · Reason: ' + esc(ts.rejection_reason) : ''}</div>
+        </div>
+        <span class="badge badge-${statusClass}">${esc(ts.status)}</span>
+      </div>`;
+  });
+  container.innerHTML = html;
+}
+
+function viewHistoryWeek(weekStr) {
+  currentWeekStart = new Date(weekStr + 'T00:00:00');
+  showScreen('scr-week');
+}
+
+// ── APPROVALS ────────────────────────────────────────────────
+async function loadApprovals() {
+  const { data: sheets } = await sb.from('timesheets')
+    .select('*, employees!timesheets_employee_id_fkey(display_name, rate_type, rate)')
+    .eq('status', 'Submitted')
+    .order('submitted_at');
+
+  const container = document.getElementById('approve-list');
+  if (!sheets || sheets.length === 0) {
+    container.innerHTML = '<div class="empty"><div class="empty-icon">✅</div><p>No timesheets awaiting approval</p></div>';
+    return;
+  }
+
+  let html = '';
+  for (const ts of sheets) {
+    const monday = new Date(ts.week_starting + 'T00:00:00');
+    const empName = ts.employees ? ts.employees.display_name : 'Unknown';
+
+    // Load entries for this timesheet
+    const friday = new Date(monday);
+    friday.setDate(friday.getDate() + 4);
+    const { data: entries } = await sb.from('time_entries')
+      .select('*')
+      .eq('employee_id', ts.employee_id)
+      .gte('entry_date', isoDate(monday))
+      .lte('entry_date', isoDate(friday))
+      .order('entry_date')
+      .order('start_time');
+
+    let daysHtml = '';
+    const dates = getWeekDates(monday);
+    dates.forEach((d, i) => {
+      const dayEntries = (entries || []).filter(e => e.entry_date === isoDate(d));
+      if (dayEntries.length > 0) {
+        const dayHours = dayEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
+        const detail = dayEntries.map(e => esc(e.project_name) + ' ' + e.start_time.slice(0,5) + '–' + e.end_time.slice(0,5)).join(', ');
+        daysHtml += `<strong>${DAY_NAMES[i]}:</strong> ${dayHours.toFixed(1)}h — ${detail}<br>`;
+      }
+    });
+
+    html += `
+      <div class="approval-card" id="approval-${ts.id}">
+        <div class="approval-hdr">
+          <span class="approval-name">${esc(empName)}</span>
+          <span class="badge badge-submitted">Submitted</span>
+        </div>
+        <div class="approval-meta">${formatWeekRange(monday)} · ${parseFloat(ts.total_hours).toFixed(1)} hours · £${parseFloat(ts.total_cost).toFixed(2)}</div>
+        <div class="approval-days">${daysHtml}</div>
+        <div class="reject-input" id="reject-input-${ts.id}">
+          <div class="field"><label>Reason for rejection</label><textarea id="reject-reason-${ts.id}" rows="2" placeholder="Explain what needs correcting..."></textarea></div>
+        </div>
+        <div class="approval-btns">
+          <button class="btn btn-primary btn-sm" onclick="approveTimesheet('${ts.id}')">Approve</button>
+          <button class="btn btn-danger btn-sm" onclick="toggleReject('${ts.id}')">Reject</button>
+        </div>
+      </div>`;
+  }
+  container.innerHTML = html;
+}
+
+function toggleReject(id) {
+  const el = document.getElementById('reject-input-' + id);
+  el.classList.toggle('show');
+  if (el.classList.contains('show')) {
+    document.getElementById('reject-reason-' + id).focus();
+  }
+}
+
+async function approveTimesheet(id) {
+  const { error } = await sb.from('timesheets').update({
+    status: 'Approved',
+    approved_by: currentEmployee.id,
+    approved_at: new Date().toISOString()
+  }).eq('id', id);
+
+  if (error) return toast('Error: ' + error.message, 4000);
+  toast('Timesheet approved');
+  const card = document.getElementById('approval-' + id);
+  if (card) card.remove();
+
+  // Check if any remaining
+  const remaining = document.querySelectorAll('.approval-card');
+  if (remaining.length === 0) {
+    document.getElementById('approve-list').innerHTML = '<div class="empty"><div class="empty-icon">✅</div><p>All timesheets approved</p></div>';
+  }
+}
+
+async function rejectTimesheet(id) {
+  const reason = document.getElementById('reject-reason-' + id).value.trim();
+  if (!reason) return toast('Enter a rejection reason');
+
+  const { error } = await sb.from('timesheets').update({
+    status: 'Rejected',
+    rejection_reason: reason
+  }).eq('id', id);
+
+  if (error) return toast('Error: ' + error.message, 4000);
+  toast('Timesheet rejected');
+  const card = document.getElementById('approval-' + id);
+  if (card) card.remove();
+
+  const remaining = document.querySelectorAll('.approval-card');
+  if (remaining.length === 0) {
+    document.getElementById('approve-list').innerHTML = '<div class="empty"><div class="empty-icon">✅</div><p>No timesheets awaiting approval</p></div>';
+  }
+}
+
+// ── ADMIN ────────────────────────────────────────────────────
+function showAdminPanel(panel) {
+  document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('admin-employees').style.display = panel === 'employees' ? '' : 'none';
+  document.getElementById('admin-approvals').style.display = panel === 'approvals' ? '' : 'none';
+  document.getElementById('admin-reports').style.display = panel === 'reports' ? '' : 'none';
+}
+
+async function loadAdmin() {
+  if (!isManager()) return showScreen('scr-dash');
+  await loadEmployeeList();
+}
+
+async function loadEmployeeList() {
+  const { data: emps } = await sb.from('employees')
+    .select('*')
+    .order('last_name')
+    .order('first_name');
+
+  const container = document.getElementById('emp-list');
+  if (!emps || emps.length === 0) {
+    container.innerHTML = '<div class="empty"><p>No employees added yet</p></div>';
+    return;
+  }
+
+  let html = '';
+  emps.forEach(e => {
+    const rateLabel = e.rate_type === 'hourly' ? '/hr' : e.rate_type === 'daily' ? '/day' : '/yr';
+    const activeTag = e.active ? '' : ' <span style="color:var(--danger);font-size:11px">(Inactive)</span>';
+    html += `
+      <div class="emp-row" style="opacity:${e.active ? 1 : 0.5}">
+        <div class="emp-info">
+          <div class="emp-name">${esc(e.display_name)}${activeTag}</div>
+          <div class="emp-detail">${esc(e.role)} · ${esc(e.employment_type)} · ${esc(e.auth_email || 'No login')}</div>
+        </div>
+        <div class="emp-rate">£${parseFloat(e.rate).toFixed(2)}${rateLabel}</div>
+        <button class="btn btn-sm ${e.active ? 'btn-outline' : 'btn-secondary'}" onclick="toggleEmployee('${e.id}', ${!e.active})" style="min-width:60px">${e.active ? 'Disable' : 'Enable'}</button>
+      </div>`;
+  });
+  container.innerHTML = html;
+}
+
+async function addEmployee() {
+  const first = document.getElementById('emp-first').value.trim();
+  const last  = document.getElementById('emp-last').value.trim();
+  const email = document.getElementById('emp-email').value.trim();
+  const role  = document.getElementById('emp-role').value;
+  const employment = document.getElementById('emp-employment').value;
+  const rateType = document.getElementById('emp-ratetype').value;
+  const rate = parseFloat(document.getElementById('emp-rate').value) || 0;
+
+  if (!first || !last) return toast('Enter first and last name');
+
+  const { error } = await sb.from('employees').insert({
+    first_name: first,
+    last_name: last,
+    auth_email: email || null,
+    role,
+    employment_type: employment,
+    rate_type: rateType,
+    rate
+  });
+
+  if (error) return toast('Error: ' + error.message, 4000);
+
+  toast('Employee added');
+  document.getElementById('emp-first').value = '';
+  document.getElementById('emp-last').value = '';
+  document.getElementById('emp-email').value = '';
+  document.getElementById('emp-rate').value = '0';
+  await loadEmployeeList();
+}
+
+async function toggleEmployee(id, active) {
+  const { error } = await sb.from('employees').update({ active }).eq('id', id);
+  if (error) return toast('Error: ' + error.message, 4000);
+  toast(active ? 'Employee enabled' : 'Employee disabled');
+  await loadEmployeeList();
+}
+
+// ── BOOT ─────────────────────────────────────────────────────
+(async function boot() {
+  if (!initSupabase()) return;
+
+  // Attach live calc listeners
+  ['entry-start', 'entry-end', 'entry-break'].forEach(id => {
+    document.getElementById(id).addEventListener('input', updateEntryCalc);
+  });
+
+  const { data: { session } } = await sb.auth.getSession();
+  if (session?.user) {
+    currentUser = session.user;
+    afterAuth();
+  }
+
+  sb.auth.onAuthStateChange((_event, session) => {
+    if (!session) {
+      currentUser = null;
+      currentEmployee = null;
+      showScreen('scr-auth');
+    }
+  });
+})();
+</script>
+</body>
+</html>
