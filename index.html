@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
   <title>WME Timesheet</title>
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="https://wme-shared.vercel.app/wme-auth.js"></script>
+  <script>if(typeof WMEAuth==='undefined')document.write('<scr'+'ipt src="http://localhost:3004/wme-auth.js"></scr'+'ipt>')</script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -227,6 +229,7 @@
 </head>
 <body>
 <div id="app">
+<div id="app-switcher" class="app-switcher" style="display:none"></div>
 
   <!-- ═══════════════════ AUTH ═══════════════════ -->
   <div id="scr-auth" class="screen active">
@@ -519,23 +522,13 @@
 <div id="toast" class="toast"></div>
 
 <script>
-// ── CONFIG ───────────────────────────────────────────────────
-const SUPABASE_URL  = 'https://zzajwyyhyioaqtyyislc.supabase.co';
-const SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp6YWp3eXloeWlvYXF0eXlpc2xjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3MDgwMDgsImV4cCI6MjA5MDI4NDAwOH0.06WD2smItfsWJYri8Xs0pdSAqqQJLohS5kCQtnfITQY';
-const ADMIN_EMAIL   = 'jamesculloty@watfordme.co.uk';
+// ── CONFIG (via WMEAuth shared module) ──────────────────────
+const sb = WMEAuth.getClient();
 
 // ── STATE ────────────────────────────────────────────────────
-let sb, currentUser, currentEmployee;
 let selectedDate = new Date();
 let currentWeekStart = getMonday(new Date());
 let projects = [];
-
-// ── INIT ─────────────────────────────────────────────────────
-function initSupabase() {
-  if (typeof supabase === 'undefined') return false;
-  sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-  return true;
-}
 
 // ── SCREEN ROUTING ───────────────────────────────────────────
 function showScreen(id) {
@@ -569,64 +562,26 @@ function toast(msg, dur = 2500) {
 // ── ESCAPE HTML ──────────────────────────────────────────────
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 
-// ── AUTH ─────────────────────────────────────────────────────
+// ── AUTH (delegated to WMEAuth) ──────────────────────────────
 async function signIn() {
   const email = document.getElementById('auth-email').value.trim();
   const pass  = document.getElementById('auth-pass').value;
   if (!email || !pass) return toast('Enter email and password');
-  const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
-  if (error) return toast(error.message, 4000);
-  currentUser = data.user;
-  afterAuth();
+  try { await WMEAuth.signIn(email, pass); }
+  catch (e) { toast(e.message, 4000); }
 }
-
 async function signUp() {
   const email = document.getElementById('auth-email').value.trim();
   const pass  = document.getElementById('auth-pass').value;
   if (!email || !pass) return toast('Enter email and password');
-  const { error } = await sb.auth.signUp({ email, password: pass });
-  if (error) return toast(error.message, 4000);
-  toast('Check your email to confirm your account', 4000);
+  try { await WMEAuth.signUp(email, pass); toast('Check your email to confirm your account', 4000); }
+  catch (e) { toast(e.message, 4000); }
 }
-
-async function signOut() {
-  await sb.auth.signOut();
-  currentUser = null;
-  currentEmployee = null;
-  showScreen('scr-auth');
-}
-
-async function afterAuth() {
-  document.getElementById('dash-user').textContent = currentUser.email;
-
-  // Load employee record
-  const { data: emp } = await sb.from('employees')
-    .select('*')
-    .eq('auth_email', currentUser.email)
-    .eq('active', true)
-    .single();
-
-  if (!emp) {
-    // Check if admin email — auto-create if needed
-    if (currentUser.email === ADMIN_EMAIL) {
-      // Try to find even inactive record, or show no-employee
-      showScreen('scr-no-employee');
-      return;
-    }
-    showScreen('scr-no-employee');
-    return;
-  }
-
-  currentEmployee = emp;
-  showAdminTabs();
-  await loadProjects();
-  await loadDashboard();
-  showScreen('scr-dash');
-}
+async function signOut() { await WMEAuth.signOut(); }
 
 // ── ADMIN TAB VISIBILITY ────────────────────────────────────
-function isAdmin() { return currentUser && (currentUser.email === ADMIN_EMAIL || (currentEmployee && currentEmployee.role === 'admin')); }
-function isManager() { return isAdmin() || (currentEmployee && currentEmployee.role === 'manager'); }
+function isAdmin()   { return WMEAuth.isAdmin(); }
+function isManager() { return WMEAuth.isManager(); }
 
 function showAdminTabs() {
   const show = isManager();
@@ -714,7 +669,7 @@ function updateEntryCalc() {
 
 // ── DASHBOARD ────────────────────────────────────────────────
 async function loadDashboard() {
-  if (!currentEmployee) return;
+  if (!WMEAuth.getEmployee()) return;
   const monday = getMonday(new Date());
   currentWeekStart = monday;
   const friday = new Date(monday);
@@ -723,7 +678,7 @@ async function loadDashboard() {
   // Load entries for this week
   const { data: entries } = await sb.from('time_entries')
     .select('*')
-    .eq('employee_id', currentEmployee.id)
+    .eq('employee_id', WMEAuth.getEmployeeId())
     .gte('entry_date', isoDate(monday))
     .lte('entry_date', isoDate(friday))
     .order('entry_date')
@@ -732,7 +687,7 @@ async function loadDashboard() {
   // Load timesheet record for this week
   const { data: ts } = await sb.from('timesheets')
     .select('*')
-    .eq('employee_id', currentEmployee.id)
+    .eq('employee_id', WMEAuth.getEmployeeId())
     .eq('week_starting', isoDate(monday))
     .single();
 
@@ -836,7 +791,7 @@ async function loadDayView() {
   const monday = getMonday(selectedDate);
   const { data: ts } = await sb.from('timesheets')
     .select('status')
-    .eq('employee_id', currentEmployee.id)
+    .eq('employee_id', WMEAuth.getEmployeeId())
     .eq('week_starting', isoDate(monday))
     .single();
 
@@ -847,7 +802,7 @@ async function loadDayView() {
   // Load entries
   const { data: entries } = await sb.from('time_entries')
     .select('*')
-    .eq('employee_id', currentEmployee.id)
+    .eq('employee_id', WMEAuth.getEmployeeId())
     .eq('entry_date', isoDate(selectedDate))
     .order('start_time');
 
@@ -904,7 +859,7 @@ async function saveTimeEntry() {
   if (hours <= 0) return toast('No working hours — check break time');
 
   const { error } = await sb.from('time_entries').insert({
-    employee_id: currentEmployee.id,
+    employee_id: WMEAuth.getEmployeeId(),
     project_name: project,
     entry_date: isoDate(selectedDate),
     start_time: start,
@@ -919,7 +874,7 @@ async function saveTimeEntry() {
   const monday = getMonday(selectedDate);
   await sb.from('timesheets')
     .update({ status: 'Draft', submitted_at: null, rejection_reason: null })
-    .eq('employee_id', currentEmployee.id)
+    .eq('employee_id', WMEAuth.getEmployeeId())
     .eq('week_starting', isoDate(monday))
     .eq('status', 'Rejected');
 
@@ -956,7 +911,7 @@ async function loadWeekView() {
   // Load entries
   const { data: entries } = await sb.from('time_entries')
     .select('*')
-    .eq('employee_id', currentEmployee.id)
+    .eq('employee_id', WMEAuth.getEmployeeId())
     .gte('entry_date', isoDate(monday))
     .lte('entry_date', isoDate(friday))
     .order('entry_date')
@@ -965,7 +920,7 @@ async function loadWeekView() {
   // Load timesheet
   const { data: ts } = await sb.from('timesheets')
     .select('*')
-    .eq('employee_id', currentEmployee.id)
+    .eq('employee_id', WMEAuth.getEmployeeId())
     .eq('week_starting', isoDate(monday))
     .single();
 
@@ -1037,7 +992,7 @@ async function submitTimesheet() {
   // Calculate totals
   const { data: entries } = await sb.from('time_entries')
     .select('calculated_hours, entry_date')
-    .eq('employee_id', currentEmployee.id)
+    .eq('employee_id', WMEAuth.getEmployeeId())
     .gte('entry_date', isoDate(monday))
     .lte('entry_date', isoDate(friday));
 
@@ -1048,18 +1003,18 @@ async function submitTimesheet() {
 
   // Calculate cost
   let totalCost = 0;
-  if (currentEmployee.rate_type === 'hourly') {
-    totalCost = totalHours * parseFloat(currentEmployee.rate);
-  } else if (currentEmployee.rate_type === 'daily') {
+  if (WMEAuth.getEmployee().rate_type === 'hourly') {
+    totalCost = totalHours * parseFloat(WMEAuth.getEmployee().rate);
+  } else if (WMEAuth.getEmployee().rate_type === 'daily') {
     const uniqueDays = new Set(weekEntries.map(e => e.entry_date)).size;
-    totalCost = uniqueDays * parseFloat(currentEmployee.rate);
-  } else if (currentEmployee.rate_type === 'salary') {
-    totalCost = parseFloat(currentEmployee.rate) / 52;
+    totalCost = uniqueDays * parseFloat(WMEAuth.getEmployee().rate);
+  } else if (WMEAuth.getEmployee().rate_type === 'salary') {
+    totalCost = parseFloat(WMEAuth.getEmployee().rate) / 52;
   }
 
   // Upsert timesheet
   const { error } = await sb.from('timesheets').upsert({
-    employee_id: currentEmployee.id,
+    employee_id: WMEAuth.getEmployeeId(),
     week_starting: isoDate(monday),
     status: 'Submitted',
     total_hours: totalHours,
@@ -1077,10 +1032,10 @@ async function submitTimesheet() {
 
 // ── HISTORY ──────────────────────────────────────────────────
 async function loadHistory() {
-  if (!currentEmployee) return;
+  if (!WMEAuth.getEmployee()) return;
   const { data: sheets } = await sb.from('timesheets')
     .select('*')
-    .eq('employee_id', currentEmployee.id)
+    .eq('employee_id', WMEAuth.getEmployeeId())
     .order('week_starting', { ascending: false })
     .limit(26);
 
@@ -1182,7 +1137,7 @@ function toggleReject(id) {
 async function approveTimesheet(id) {
   const { error } = await sb.from('timesheets').update({
     status: 'Approved',
-    approved_by: currentEmployee.id,
+    approved_by: WMEAuth.getEmployeeId(),
     approved_at: new Date().toISOString()
   }).eq('id', id);
 
@@ -1300,28 +1255,24 @@ async function toggleEmployee(id, active) {
 }
 
 // ── BOOT ─────────────────────────────────────────────────────
-(async function boot() {
-  if (!initSupabase()) return;
+// Attach live calc listeners
+['entry-start', 'entry-end', 'entry-break'].forEach(id => {
+  document.getElementById(id).addEventListener('input', updateEntryCalc);
+});
 
-  // Attach live calc listeners
-  ['entry-start', 'entry-end', 'entry-break'].forEach(id => {
-    document.getElementById(id).addEventListener('input', updateEntryCalc);
-  });
-
-  const { data: { session } } = await sb.auth.getSession();
-  if (session?.user) {
-    currentUser = session.user;
-    afterAuth();
-  }
-
-  sb.auth.onAuthStateChange((_event, session) => {
-    if (!session) {
-      currentUser = null;
-      currentEmployee = null;
-      showScreen('scr-auth');
-    }
-  });
-})();
+WMEAuth.init({
+  app: 'timesheet',
+  onReady(emp) {
+    document.getElementById('dash-user').textContent = WMEAuth.getUserEmail();
+    WMEAuth.renderAppSwitcher('app-switcher');
+    document.getElementById('app-switcher').style.display = '';
+    showAdminTabs();
+    loadProjects().then(() => { loadDashboard(); showScreen('scr-dash'); });
+  },
+  onSignedOut()  { showScreen('scr-auth'); },
+  onNoEmployee() { showScreen('scr-no-employee'); },
+  onNoAccess()   { showScreen('scr-no-access'); }
+});
 </script>
 </body>
 </html>
