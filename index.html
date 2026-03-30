@@ -484,6 +484,54 @@
           </div>
           <button class="btn btn-primary" onclick="addEmployee()">Add Employee</button>
         </div>
+        <!-- Edit Employee (hidden by default) -->
+        <div id="emp-edit-card" class="card" style="display:none">
+          <div class="card-title">Edit Employee</div>
+          <input type="hidden" id="edit-id" />
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="field"><label>First Name</label><input id="edit-first" /></div>
+            <div class="field"><label>Last Name</label><input id="edit-last" /></div>
+          </div>
+          <div class="field"><label>Email</label><input id="edit-email" type="email" /></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="field">
+              <label>Role</label>
+              <select id="edit-role">
+                <option value="operative">Operative</option>
+                <option value="office">Office</option>
+                <option value="manager">Manager</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Employment</label>
+              <select id="edit-employment">
+                <option value="employed">Employed</option>
+                <option value="subcontractor">Subcontractor</option>
+                <option value="agency">Agency</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="field">
+              <label>Rate Type</label>
+              <select id="edit-ratetype">
+                <option value="hourly">Hourly</option>
+                <option value="daily">Daily</option>
+                <option value="salary">Salary</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Rate (£)</label>
+              <input id="edit-rate" type="number" step="0.01" value="0" />
+            </div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary" onclick="saveEditEmployee()" style="flex:1">Save Changes</button>
+            <button class="btn btn-outline" onclick="cancelEditEmployee()" style="flex:1">Cancel</button>
+          </div>
+        </div>
+
         <div class="card-title">Current Employees</div>
         <div id="emp-list"></div>
       </div>
@@ -1227,7 +1275,10 @@ async function loadEmployeeList() {
           <div class="emp-detail">${esc(e.role)} · ${esc(e.employment_type)} · ${esc(e.auth_email || 'No login')}</div>
         </div>
         <div class="emp-rate">£${parseFloat(e.rate).toFixed(2)}${rateLabel}</div>
-        <button class="btn btn-sm ${e.active ? 'btn-outline' : 'btn-secondary'}" onclick="toggleEmployee('${e.id}', ${!e.active})" style="min-width:60px">${e.active ? 'Disable' : 'Enable'}</button>
+        <div style="display:flex;gap:4px">
+          <button class="btn btn-sm btn-secondary" onclick="editEmployee('${e.id}')" style="min-width:50px">Edit</button>
+          <button class="btn btn-sm ${e.active ? 'btn-outline' : 'btn-secondary'}" onclick="toggleEmployee('${e.id}', ${!e.active})" style="min-width:60px">${e.active ? 'Disable' : 'Enable'}</button>
+        </div>
       </div>`;
   });
   container.innerHTML = html;
@@ -1262,6 +1313,60 @@ async function addEmployee() {
   document.getElementById('emp-email').value = '';
   document.getElementById('emp-rate').value = '0';
   await loadEmployeeList();
+}
+
+async function editEmployee(id) {
+  const { data: emp } = await sb.from('employees').select('*').eq('id', id).single();
+  if (!emp) return toast('Employee not found');
+
+  document.getElementById('edit-id').value = emp.id;
+  document.getElementById('edit-first').value = emp.first_name;
+  document.getElementById('edit-last').value = emp.last_name;
+  document.getElementById('edit-email').value = emp.auth_email || '';
+  document.getElementById('edit-role').value = emp.role;
+  document.getElementById('edit-employment').value = emp.employment_type;
+  document.getElementById('edit-ratetype').value = emp.rate_type;
+  document.getElementById('edit-rate').value = emp.rate;
+
+  // Non-admins can't assign admin role
+  const adminOpt = document.querySelector('#edit-role option[value="admin"]');
+  if (adminOpt) adminOpt.disabled = !isAdmin();
+
+  document.getElementById('emp-edit-card').style.display = '';
+  document.getElementById('emp-edit-card').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function saveEditEmployee() {
+  const id    = document.getElementById('edit-id').value;
+  const first = document.getElementById('edit-first').value.trim();
+  const last  = document.getElementById('edit-last').value.trim();
+  const email = document.getElementById('edit-email').value.trim();
+  const role  = document.getElementById('edit-role').value;
+  const employment = document.getElementById('edit-employment').value;
+  const rateType   = document.getElementById('edit-ratetype').value;
+  const rate  = parseFloat(document.getElementById('edit-rate').value) || 0;
+
+  if (!first || !last) return toast('First and last name required');
+
+  const { error } = await sb.from('employees').update({
+    first_name: first,
+    last_name: last,
+    auth_email: email || null,
+    role,
+    employment_type: employment,
+    rate_type: rateType,
+    rate
+  }).eq('id', id);
+
+  if (error) return toast('Error: ' + error.message, 4000);
+
+  toast('Employee updated');
+  document.getElementById('emp-edit-card').style.display = 'none';
+  await loadEmployeeList();
+}
+
+function cancelEditEmployee() {
+  document.getElementById('emp-edit-card').style.display = 'none';
 }
 
 async function toggleEmployee(id, active) {
