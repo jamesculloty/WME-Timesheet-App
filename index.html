@@ -73,6 +73,9 @@
     .auth-title { font-size: 22px; font-weight: 700; color: var(--green); }
     .auth-sub { font-size: 14px; color: var(--muted); margin-bottom: 16px; }
     .auth-form { width: 100%; display: flex; flex-direction: column; gap: 10px; }
+    .signup-fields { display: none; }
+    .name-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .name-row input { width: 100%; }
     .auth-form input { width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 15px; outline: none; }
     .auth-form input:focus { border-color: var(--green); }
 
@@ -238,10 +241,16 @@
       <div class="auth-title">WME Timesheet</div>
       <div class="auth-sub">Watford ME Ltd</div>
       <div class="auth-form">
+        <div id="signup-fields" class="signup-fields">
+          <div class="name-row">
+            <input id="auth-first" type="text" placeholder="First name" />
+            <input id="auth-last" type="text" placeholder="Last name" />
+          </div>
+        </div>
         <input id="auth-email" type="email" placeholder="Email" autocomplete="email" />
         <input id="auth-pass" type="password" placeholder="Password" autocomplete="current-password" />
-        <button class="btn btn-primary" onclick="signIn()">Sign in</button>
-        <button class="btn btn-secondary" onclick="signUp()">Create account</button>
+        <button class="btn btn-primary" id="auth-action-btn" onclick="authAction()">Sign in</button>
+        <button class="btn btn-secondary" id="auth-toggle-btn" onclick="toggleAuthMode()">Create account</button>
       </div>
     </div>
   </div>
@@ -563,19 +572,27 @@ function toast(msg, dur = 2500) {
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 
 // ── AUTH (delegated to WMEAuth) ──────────────────────────────
-async function signIn() {
-  const email = document.getElementById('auth-email').value.trim();
-  const pass  = document.getElementById('auth-pass').value;
-  if (!email || !pass) return toast('Enter email and password');
-  try { await WMEAuth.signIn(email, pass); }
-  catch (e) { toast(e.message, 4000); }
+let isSignUp = false;
+function toggleAuthMode() {
+  isSignUp = !isSignUp;
+  document.getElementById('signup-fields').style.display = isSignUp ? 'block' : 'none';
+  document.getElementById('auth-action-btn').textContent = isSignUp ? 'Create account' : 'Sign in';
+  document.getElementById('auth-toggle-btn').textContent = isSignUp ? 'Back to sign in' : 'Create account';
 }
-async function signUp() {
+async function authAction() {
   const email = document.getElementById('auth-email').value.trim();
   const pass  = document.getElementById('auth-pass').value;
   if (!email || !pass) return toast('Enter email and password');
-  try { await WMEAuth.signUp(email, pass); toast('Check your email to confirm your account', 4000); }
-  catch (e) { toast(e.message, 4000); }
+  if (isSignUp) {
+    const first = document.getElementById('auth-first').value.trim();
+    const last  = document.getElementById('auth-last').value.trim();
+    if (!first || !last) return toast('Please enter your first and last name');
+    try { await WMEAuth.signUp(email, pass, { firstName: first, lastName: last }); toast('Check your email to confirm your account', 4000); }
+    catch (e) { toast(e.message, 4000); }
+  } else {
+    try { await WMEAuth.signIn(email, pass); }
+    catch (e) { toast(e.message, 4000); }
+  }
 }
 async function signOut() { await WMEAuth.signOut(); }
 
