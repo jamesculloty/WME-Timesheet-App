@@ -199,6 +199,17 @@
     .nav-tab svg { width: 20px; height: 20px; }
 
     /* ── Toast ── */
+    /* ── Quick-add modal ── */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 300; }
+    .modal-card { background: var(--white); border-radius: var(--radius); padding: 20px; width: 90%; max-width: 400px; }
+    .modal-card h3 { font-size: 16px; font-weight: 700; color: var(--green); margin-bottom: 14px; }
+    .modal-btns { display: flex; gap: 8px; margin-top: 16px; }
+    .modal-btns .btn { flex: 1; }
+    .field-row { display: flex; align-items: flex-end; gap: 6px; }
+    .field-row .field { flex: 1; }
+    .add-btn { width: 38px; height: 38px; border: 1.5px solid var(--green); border-radius: var(--radius-sm); background: var(--green-lt); color: var(--green); font-size: 20px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-bottom: 14px; transition: background .15s; }
+    .add-btn:hover { background: var(--green); color: var(--white); }
+
     .toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--white); padding: 10px 18px; border-radius: 20px; font-size: 13px; font-weight: 500; opacity: 0; transition: opacity .2s; pointer-events: none; white-space: nowrap; z-index: 200; }
     .toast.show { opacity: 1; }
 
@@ -323,9 +334,12 @@
 
       <div class="card" id="day-entry-form">
         <div class="card-title">Add Entry</div>
-        <div class="field">
-          <label>Project</label>
-          <select id="entry-project"><option value="">Select project...</option></select>
+        <div class="field-row">
+          <div class="field">
+            <label>Project</label>
+            <select id="entry-project"><option value="">Select project...</option></select>
+          </div>
+          <button class="add-btn qa-add-btn" onclick="openAddProjectModal()" title="Add new project">+</button>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
           <div class="field">
@@ -574,6 +588,20 @@
     </div>
   </div>
 
+</div>
+
+<!-- ══ QUICK-ADD MODAL ══════════════════════════════════════ -->
+<div id="modal-add-project" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('modal-add-project')">
+  <div class="modal-card">
+    <h3>Add New Project</h3>
+    <div class="field"><label>Project name *</label><input type="text" id="qa-project-name" placeholder="e.g. UCL Phase 2" /></div>
+    <div class="field"><label>Site address</label><input type="text" id="qa-project-site" placeholder="e.g. Gower Street, London" /></div>
+    <div class="field"><label>Project manager</label><input type="text" id="qa-project-mgr" placeholder="e.g. James C" /></div>
+    <div class="modal-btns">
+      <button class="btn btn-outline btn-sm" onclick="closeModal('modal-add-project')">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="quickAddProject()">Save project</button>
+    </div>
+  </div>
 </div>
 
 <div id="toast" class="toast"></div>
@@ -1382,6 +1410,34 @@ async function toggleEmployee(id, active) {
   document.getElementById(id).addEventListener('input', updateEntryCalc);
 });
 
+// ── Quick-add modal ──────────────────────────────────────────
+function openAddProjectModal() {
+  ['qa-project-name','qa-project-site','qa-project-mgr'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('modal-add-project').style.display = '';
+  document.getElementById('qa-project-name').focus();
+}
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+async function quickAddProject() {
+  const name = document.getElementById('qa-project-name').value.trim();
+  if (!name) return toast('Project name is required');
+  const { error } = await sb.from('projects').insert({
+    name,
+    site:    document.getElementById('qa-project-site').value.trim() || null,
+    manager: document.getElementById('qa-project-mgr').value.trim() || null,
+    status:  'Active',
+  });
+  if (error) return toast('Error: ' + error.message, 4000);
+  toast('Project added');
+  closeModal('modal-add-project');
+  await loadProjects();
+}
+
+function showQuickAddButtons() {
+  const show = isManager();
+  document.querySelectorAll('.qa-add-btn').forEach(btn => btn.style.display = show ? '' : 'none');
+}
+
 WMEAuth.init({
   app: 'timesheet',
   onReady(emp) {
@@ -1389,6 +1445,7 @@ WMEAuth.init({
     WMEAuth.renderAppSwitcher('app-switcher');
     document.getElementById('app-switcher').style.display = '';
     showAdminTabs();
+    showQuickAddButtons();
     loadProjects().then(() => { loadDashboard(); showScreen('scr-dash'); });
   },
   onSignedOut()  { showScreen('scr-auth'); },
