@@ -277,7 +277,7 @@
     </div>
     <div class="body">
       <div class="stats">
-        <div class="stat"><div class="stat-n" id="stat-hours">0</div><div class="stat-l">Hours this week</div></div>
+        <div class="stat"><div class="stat-n" id="stat-hours">0</div><div class="stat-l" id="stat-hours-label">Hours this week</div></div>
         <div class="stat"><div class="stat-n" id="stat-status">Draft</div><div class="stat-l">Week status</div></div>
         <div class="stat"><div class="stat-n" id="stat-pending">0</div><div class="stat-l" id="stat-pending-label">Pending approval</div></div>
         <div class="stat"><div class="stat-n" id="stat-week">—</div><div class="stat-l">Current week</div></div>
@@ -341,29 +341,32 @@
           </div>
           <button class="add-btn qa-add-btn" onclick="openAddProjectModal()" title="Add new project">+</button>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <div class="field">
-            <label>Start</label>
-            <input type="time" id="entry-start" value="07:00" />
+        <div id="entry-time-fields">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="field">
+              <label>Start</label>
+              <input type="time" id="entry-start" value="07:00" />
+            </div>
+            <div class="field">
+              <label>End</label>
+              <input type="time" id="entry-end" value="16:30" />
+            </div>
           </div>
           <div class="field">
-            <label>End</label>
-            <input type="time" id="entry-end" value="16:30" />
+            <label>Break (minutes)</label>
+            <input type="number" id="entry-break" value="30" min="0" step="5" />
+          </div>
+          <div class="total-bar" style="margin-bottom:14px">
+            <span class="total-bar-label">Hours</span>
+            <span class="total-bar-val" id="entry-calc-hours">9.0</span>
           </div>
         </div>
-        <div class="field">
-          <label>Break (minutes)</label>
-          <input type="number" id="entry-break" value="30" min="0" step="5" />
-        </div>
-        <div class="total-bar" style="margin-bottom:14px">
-          <span class="total-bar-label">Hours</span>
-          <span class="total-bar-val" id="entry-calc-hours">9.0</span>
-        </div>
+        <div id="entry-daily-msg" class="info-box" style="display:none">Day rate — select your project and log this day as worked.</div>
         <div class="field">
           <label>Notes (optional)</label>
           <input type="text" id="entry-notes" placeholder="e.g. First fix, 2nd floor" />
         </div>
-        <button class="btn btn-primary" onclick="saveTimeEntry()">Save Entry</button>
+        <button class="btn btn-primary" id="entry-save-btn" onclick="saveTimeEntry()">Save Entry</button>
       </div>
     </div>
   </div>
@@ -675,6 +678,7 @@ async function signOut() { await WMEAuth.signOut(); }
 // ── ADMIN TAB VISIBILITY ────────────────────────────────────
 function isAdmin()   { return WMEAuth.isAdmin(); }
 function isManager() { return WMEAuth.isManager(); }
+function isDailyRate() { const emp = WMEAuth.getEmployee(); return emp && emp.rate_type === 'daily'; }
 
 function showAdminTabs() {
   const show = isManager();
@@ -789,7 +793,10 @@ async function loadDashboard() {
   const status = ts ? ts.status : 'Draft';
 
   // Stats
-  document.getElementById('stat-hours').textContent = totalHours.toFixed(1);
+  const daily = isDailyRate();
+  const uniqueDays = new Set(weekEntries.map(e => e.entry_date)).size;
+  document.getElementById('stat-hours').textContent = daily ? uniqueDays : totalHours.toFixed(1);
+  document.getElementById('stat-hours-label').textContent = daily ? 'Days this week' : 'Hours this week';
   document.getElementById('stat-status').textContent = status;
   document.getElementById('stat-status').style.fontSize = '16px';
   document.getElementById('stat-week').textContent = formatWeekRange(monday);
@@ -815,17 +822,22 @@ async function loadDashboard() {
     const dayEntries = weekEntries.filter(e => e.entry_date === isoDate(d));
     const dayHours = dayEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
     const hasEntries = dayEntries.length > 0;
+    const dayDisplay = daily
+      ? (hasEntries ? '&#10003;' : '—')
+      : (hasEntries ? dayHours.toFixed(1) + 'h' : '—');
     grid.innerHTML += `
       <div class="week-day ${hasEntries ? 'has-entries' : ''}" onclick="openLogDay('${isoDate(d)}')">
         <span class="week-day-name">${DAY_NAMES[i]}</span>
         <span class="week-day-date">${formatDateShort(d)}</span>
-        <span class="week-day-hours ${hasEntries ? '' : 'empty'}">${hasEntries ? dayHours.toFixed(1) + 'h' : '—'}</span>
+        <span class="week-day-hours ${hasEntries ? '' : 'empty'}">${dayDisplay}</span>
       </div>`;
   });
 
   // Week label and total
   document.getElementById('dash-week-label').textContent = 'Week: ' + formatWeekRange(monday);
-  document.getElementById('dash-week-total').textContent = totalHours.toFixed(1) + ' hrs';
+  document.getElementById('dash-week-total').textContent = daily
+    ? uniqueDays + (uniqueDays === 1 ? ' day' : ' days')
+    : totalHours.toFixed(1) + ' hrs';
 
   // Submit button
   const submitBtn = document.getElementById('dash-submit-btn');
@@ -892,6 +904,12 @@ async function loadDayView() {
   const form = document.getElementById('day-entry-form');
   form.style.display = locked ? 'none' : '';
 
+  // Daily rate: hide time fields, change button text
+  const daily = isDailyRate();
+  document.getElementById('entry-time-fields').style.display = daily ? 'none' : '';
+  document.getElementById('entry-daily-msg').style.display = daily ? '' : 'none';
+  document.getElementById('entry-save-btn').textContent = daily ? 'Log this day' : 'Save Entry';
+
   // Load entries
   const { data: entries } = await sb.from('time_entries')
     .select('*')
@@ -911,18 +929,21 @@ async function loadDayView() {
     dayEntries.forEach(e => {
       const hours = parseFloat(e.calculated_hours || 0);
       totalHours += hours;
+      const timesText = daily
+        ? 'Present' + (e.notes ? ' · ' + esc(e.notes) : '')
+        : e.start_time.slice(0,5) + ' – ' + e.end_time.slice(0,5) + ' (' + e.break_minutes + 'min break)' + (e.notes ? ' · ' + esc(e.notes) : '');
       html += `
         <div class="entry-row">
           <div class="entry-info">
             <div class="entry-project">${esc(e.project_name)}</div>
-            <div class="entry-times">${e.start_time.slice(0,5)} – ${e.end_time.slice(0,5)} (${e.break_minutes}min break)${e.notes ? ' · ' + esc(e.notes) : ''}</div>
+            <div class="entry-times">${timesText}</div>
           </div>
-          <div class="entry-hours">${hours.toFixed(1)}h</div>
+          <div class="entry-hours">${daily ? '1 day' : hours.toFixed(1) + 'h'}</div>
           ${locked ? '' : `<button class="entry-del" onclick="deleteTimeEntry('${e.id}')" title="Delete">×</button>`}
         </div>`;
     });
     container.innerHTML = html;
-    document.getElementById('day-total-bar').style.display = '';
+    document.getElementById('day-total-bar').style.display = daily ? 'none' : '';
     document.getElementById('day-total').textContent = totalHours.toFixed(1) + ' hrs';
   }
 
@@ -938,18 +959,32 @@ async function loadDayView() {
 // ── SAVE TIME ENTRY ──────────────────────────────────────────
 async function saveTimeEntry() {
   const project = document.getElementById('entry-project').value;
-  const start   = document.getElementById('entry-start').value;
-  const end     = document.getElementById('entry-end').value;
-  const brk     = parseInt(document.getElementById('entry-break').value) || 0;
   const notes   = document.getElementById('entry-notes').value.trim();
-
   if (!project) return toast('Select a project');
-  if (!start || !end) return toast('Enter start and end times');
-  if (end <= start) return toast('End time must be after start time');
-  if (brk < 0) return toast('Break cannot be negative');
 
-  const hours = calcHours(start, end, brk);
-  if (hours <= 0) return toast('No working hours — check break time');
+  let start, end, brk;
+
+  if (isDailyRate()) {
+    // Check for duplicate — one entry per day for daily rate
+    const { data: existing } = await sb.from('time_entries')
+      .select('id')
+      .eq('employee_id', WMEAuth.getEmployeeId())
+      .eq('entry_date', isoDate(selectedDate))
+      .limit(1);
+    if (existing && existing.length > 0) return toast('Already logged for this day');
+    start = '07:00';
+    end   = '16:30';
+    brk   = 30;
+  } else {
+    start = document.getElementById('entry-start').value;
+    end   = document.getElementById('entry-end').value;
+    brk   = parseInt(document.getElementById('entry-break').value) || 0;
+    if (!start || !end) return toast('Enter start and end times');
+    if (end <= start) return toast('End time must be after start time');
+    if (brk < 0) return toast('Break cannot be negative');
+    const hours = calcHours(start, end, brk);
+    if (hours <= 0) return toast('No working hours — check break time');
+  }
 
   const { error } = await sb.from('time_entries').insert({
     employee_id: WMEAuth.getEmployeeId(),
@@ -961,7 +996,7 @@ async function saveTimeEntry() {
     notes: notes || null
   });
 
-  if (error) return toast('Error: ' + error.message, 4000);
+  if (error) return toast('Error: ' + (error.message || 'Could not save'), 4000);
 
   // Reset timesheet to Draft if it was Rejected
   const monday = getMonday(selectedDate);
@@ -1019,6 +1054,7 @@ async function loadWeekView() {
 
   const weekEntries = entries || [];
   const status = ts ? ts.status : 'Draft';
+  const daily = isDailyRate();
 
   // Status banner
   const banner = document.getElementById('week-status-banner');
@@ -1048,22 +1084,31 @@ async function loadWeekView() {
     let entriesHtml = '';
     if (hasEntries) {
       dayEntries.forEach(e => {
-        entriesHtml += `<div style="font-size:12px;color:var(--muted);padding:2px 0 2px 46px">${esc(e.project_name)} · ${e.start_time.slice(0,5)}–${e.end_time.slice(0,5)} · ${parseFloat(e.calculated_hours).toFixed(1)}h</div>`;
+        const detail = daily
+          ? esc(e.project_name) + ' · Present'
+          : esc(e.project_name) + ' · ' + e.start_time.slice(0,5) + '–' + e.end_time.slice(0,5) + ' · ' + parseFloat(e.calculated_hours).toFixed(1) + 'h';
+        entriesHtml += `<div style="font-size:12px;color:var(--muted);padding:2px 0 2px 46px">${detail}</div>`;
       });
     }
 
+    const dayDisplay = daily
+      ? (hasEntries ? '&#10003;' : '—')
+      : (hasEntries ? dayHours.toFixed(1) + 'h' : '—');
     grid.innerHTML += `
       <div>
         <div class="week-day ${hasEntries ? 'has-entries' : ''}" onclick="openLogDay('${isoDate(d)}')">
           <span class="week-day-name">${DAY_NAMES[i]}</span>
           <span class="week-day-date">${formatDateShort(d)}</span>
-          <span class="week-day-hours ${hasEntries ? '' : 'empty'}">${hasEntries ? dayHours.toFixed(1) + 'h' : '—'}</span>
+          <span class="week-day-hours ${hasEntries ? '' : 'empty'}">${dayDisplay}</span>
         </div>
         ${entriesHtml}
       </div>`;
   });
 
-  document.getElementById('week-total').textContent = totalHours.toFixed(1) + ' hrs';
+  const uniqueDays = new Set(weekEntries.map(e => e.entry_date)).size;
+  document.getElementById('week-total').textContent = daily
+    ? uniqueDays + (uniqueDays === 1 ? ' day' : ' days')
+    : totalHours.toFixed(1) + ' hrs';
 
   // Submit button
   const submitBtn = document.getElementById('week-submit-btn');
@@ -1118,8 +1163,11 @@ async function submitTimesheet() {
   if (error) return toast('Error: ' + error.message, 4000);
 
   // Show confirmation
-  document.getElementById('submit-summary').textContent =
-    formatWeekRange(monday) + ' · ' + totalHours.toFixed(1) + ' hours';
+  const daily = isDailyRate();
+  const uniqueDays = new Set(weekEntries.map(e => e.entry_date)).size;
+  document.getElementById('submit-summary').textContent = daily
+    ? formatWeekRange(monday) + ' · ' + uniqueDays + (uniqueDays === 1 ? ' day' : ' days')
+    : formatWeekRange(monday) + ' · ' + totalHours.toFixed(1) + ' hours';
   showScreen('scr-submit');
 }
 
@@ -1146,7 +1194,7 @@ async function loadHistory() {
       <div class="history-row" onclick="viewHistoryWeek('${ts.week_starting}')">
         <div class="history-info">
           <div class="history-week">${formatWeekRange(monday)}</div>
-          <div class="history-hours">${parseFloat(ts.total_hours).toFixed(1)} hours${ts.rejection_reason ? ' · Reason: ' + esc(ts.rejection_reason) : ''}</div>
+          <div class="history-hours">${isDailyRate() ? Math.round(parseFloat(ts.total_hours) / 9) + ' days' : parseFloat(ts.total_hours).toFixed(1) + ' hours'}${ts.rejection_reason ? ' · Reason: ' + esc(ts.rejection_reason) : ''}</div>
         </div>
         <span class="badge badge-${statusClass}">${esc(ts.status)}</span>
       </div>`;
@@ -1188,24 +1236,34 @@ async function loadApprovals() {
       .order('entry_date')
       .order('start_time');
 
+    const empDaily = ts.employees && ts.employees.rate_type === 'daily';
     let daysHtml = '';
     const dates = getWeekDates(monday);
+    const empUniqueDays = new Set((entries || []).map(e => e.entry_date)).size;
     dates.forEach((d, i) => {
       const dayEntries = (entries || []).filter(e => e.entry_date === isoDate(d));
       if (dayEntries.length > 0) {
-        const dayHours = dayEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
-        const detail = dayEntries.map(e => esc(e.project_name) + ' ' + e.start_time.slice(0,5) + '–' + e.end_time.slice(0,5)).join(', ');
-        daysHtml += `<strong>${DAY_NAMES[i]}:</strong> ${dayHours.toFixed(1)}h — ${detail}<br>`;
+        if (empDaily) {
+          const detail = dayEntries.map(e => esc(e.project_name)).join(', ');
+          daysHtml += `<strong>${DAY_NAMES[i]}:</strong> Present — ${detail}<br>`;
+        } else {
+          const dayHours = dayEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
+          const detail = dayEntries.map(e => esc(e.project_name) + ' ' + e.start_time.slice(0,5) + '–' + e.end_time.slice(0,5)).join(', ');
+          daysHtml += `<strong>${DAY_NAMES[i]}:</strong> ${dayHours.toFixed(1)}h — ${detail}<br>`;
+        }
       }
     });
 
+    const metaHours = empDaily
+      ? empUniqueDays + (empUniqueDays === 1 ? ' day' : ' days')
+      : parseFloat(ts.total_hours).toFixed(1) + ' hours';
     html += `
       <div class="approval-card" id="approval-${ts.id}">
         <div class="approval-hdr">
           <span class="approval-name">${esc(empName)}</span>
           <span class="badge badge-submitted">Submitted</span>
         </div>
-        <div class="approval-meta">${formatWeekRange(monday)} · ${parseFloat(ts.total_hours).toFixed(1)} hours · £${parseFloat(ts.total_cost).toFixed(2)}</div>
+        <div class="approval-meta">${formatWeekRange(monday)} · ${metaHours} · £${parseFloat(ts.total_cost).toFixed(2)}</div>
         <div class="approval-days">${daysHtml}</div>
         <div class="reject-input" id="reject-input-${ts.id}">
           <div class="field"><label>Reason for rejection</label><textarea id="reject-reason-${ts.id}" rows="2" placeholder="Explain what needs correcting..."></textarea></div>
