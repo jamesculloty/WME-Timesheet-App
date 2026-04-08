@@ -105,6 +105,10 @@
     .badge-submitted { background: var(--amber-lt); color: var(--amber-tx); }
     .badge-approved  { background: var(--green-lt); color: var(--green); }
     .badge-rejected  { background: var(--danger-lt); color: var(--danger); }
+    .badge-holiday   { background: #EBF4FF; color: #1A5C99; }
+    .badge-sick      { background: var(--amber-lt); color: var(--amber-tx); }
+    .badge-absent    { background: #F0F0F0; color: #666; }
+    .badge-halfday   { background: var(--green-lt); color: var(--green); }
 
     /* ── Form fields ── */
     .field { margin-bottom: 14px; }
@@ -341,6 +345,19 @@
 
       <div class="card" id="day-entry-form">
         <div class="card-title">Add Entry</div>
+        <div class="field">
+          <label>Type</label>
+          <select id="entry-type" onchange="onEntryTypeChange()">
+            <option value="work">Work</option>
+            <option value="half_day_work">Half Day Work</option>
+            <option value="holiday">Holiday</option>
+            <option value="half_day_holiday">Half Day Holiday</option>
+            <option value="sick">Sick</option>
+            <option value="absent">Absent</option>
+          </select>
+        </div>
+        <div id="entry-leave-msg" class="info-box" style="display:none"></div>
+        <div id="entry-work-fields">
         <div class="field-row">
           <div class="field">
             <label>Project</label>
@@ -369,6 +386,7 @@
           </div>
         </div>
         <div id="entry-daily-msg" class="info-box" style="display:none">Day rate — select your project and log this day as worked.</div>
+        </div><!-- /entry-work-fields -->
         <div class="field">
           <label>Notes (optional)</label>
           <input type="text" id="entry-notes" placeholder="e.g. First fix, 2nd floor" />
@@ -554,6 +572,26 @@
               <input id="emp-rate" type="number" step="0.01" value="0" />
             </div>
           </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+            <div class="field">
+              <label>Sick Pay</label>
+              <select id="emp-sickpay">
+                <option value="paid">Paid</option>
+                <option value="unpaid">Unpaid</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Absent Pay</label>
+              <select id="emp-absentpay">
+                <option value="unpaid">Unpaid</option>
+                <option value="paid">Paid</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Holiday (days)</label>
+              <input id="emp-holidays" type="number" min="0" value="21" />
+            </div>
+          </div>
           <button class="btn btn-primary" onclick="addEmployee()">Add Employee</button>
         </div>
         <!-- Edit Employee (hidden by default) -->
@@ -597,6 +635,26 @@
             <div class="field">
               <label>Rate (£)</label>
               <input id="edit-rate" type="number" step="0.01" value="0" />
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+            <div class="field">
+              <label>Sick Pay</label>
+              <select id="edit-sickpay">
+                <option value="paid">Paid</option>
+                <option value="unpaid">Unpaid</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Absent Pay</label>
+              <select id="edit-absentpay">
+                <option value="unpaid">Unpaid</option>
+                <option value="paid">Paid</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Holiday (days)</label>
+              <input id="edit-holidays" type="number" min="0" value="21" />
             </div>
           </div>
           <div style="display:flex;gap:8px">
@@ -838,6 +896,80 @@ function updateEntryCalc() {
   }
 }
 
+// ── ENTRY TYPE HELPERS ───────────────────────────────────────
+const LEAVE_TYPES = ['holiday', 'half_day_holiday', 'sick', 'absent'];
+const WORK_TYPES = ['work', 'half_day_work'];
+
+function isLeaveType(t) { return LEAVE_TYPES.includes(t); }
+
+function entryTypeBadge(t) {
+  switch(t) {
+    case 'holiday':          return '<span class="badge badge-holiday">Holiday</span>';
+    case 'half_day_holiday':  return '<span class="badge badge-holiday">Half Day Holiday</span>';
+    case 'half_day_work':     return '<span class="badge badge-halfday">Half Day</span>';
+    case 'sick':              return '<span class="badge badge-sick">Sick</span>';
+    case 'absent':            return '<span class="badge badge-absent">Absent</span>';
+    default: return '';
+  }
+}
+
+function entryTypeLabel(t) {
+  switch(t) {
+    case 'work': return 'Work';
+    case 'half_day_work': return 'Half Day Work';
+    case 'holiday': return 'Holiday';
+    case 'half_day_holiday': return 'Half Day Holiday';
+    case 'sick': return 'Sick';
+    case 'absent': return 'Absent';
+    default: return t;
+  }
+}
+
+function onEntryTypeChange() {
+  const type = document.getElementById('entry-type').value;
+  const workFields = document.getElementById('entry-work-fields');
+  const leaveMsg = document.getElementById('entry-leave-msg');
+  const saveBtn = document.getElementById('entry-save-btn');
+
+  if (isLeaveType(type)) {
+    workFields.style.display = 'none';
+    leaveMsg.style.display = '';
+    leaveMsg.textContent = 'Log ' + entryTypeLabel(type).toLowerCase() + ' for this day.';
+    saveBtn.textContent = 'Log ' + entryTypeLabel(type);
+  } else if (type === 'half_day_work') {
+    workFields.style.display = '';
+    leaveMsg.style.display = 'none';
+    document.getElementById('entry-start').value = '08:00';
+    document.getElementById('entry-end').value = '12:30';
+    document.getElementById('entry-break').value = '0';
+    updateEntryCalc();
+    saveBtn.textContent = 'Save Half Day';
+  } else {
+    workFields.style.display = '';
+    leaveMsg.style.display = 'none';
+    document.getElementById('entry-start').value = '08:00';
+    document.getElementById('entry-end').value = '16:30';
+    document.getElementById('entry-break').value = '30';
+    updateEntryCalc();
+    saveBtn.textContent = isDailyRate() ? 'Log this day' : 'Save Entry';
+  }
+}
+
+async function getHolidaysRemaining() {
+  const emp = WMEAuth.getEmployee();
+  const allowance = emp.holiday_allowance ?? 21;
+  const year = new Date().getFullYear();
+  const { data } = await sb.from('time_entries')
+    .select('entry_type')
+    .eq('employee_id', WMEAuth.getEmployeeId())
+    .in('entry_type', ['holiday', 'half_day_holiday'])
+    .gte('entry_date', year + '-01-01')
+    .lte('entry_date', year + '-12-31');
+  let used = 0;
+  (data || []).forEach(e => { used += e.entry_type === 'half_day_holiday' ? 0.5 : 1; });
+  return { allowance, used, remaining: allowance - used };
+}
+
 // ── DASHBOARD ────────────────────────────────────────────────
 async function loadDashboard() {
   if (!WMEAuth.getEmployee()) return;
@@ -896,9 +1028,15 @@ async function loadDashboard() {
     const dayEntries = weekEntries.filter(e => e.entry_date === isoDate(d));
     const dayHours = dayEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
     const hasEntries = dayEntries.length > 0;
-    const dayDisplay = daily
-      ? (hasEntries ? '&#10003;' : '—')
-      : (hasEntries ? dayHours.toFixed(1) + 'h' : '—');
+    const leaveEntry = dayEntries.find(e => isLeaveType(e.entry_type));
+    let dayDisplay;
+    if (leaveEntry) {
+      dayDisplay = entryTypeBadge(leaveEntry.entry_type);
+    } else if (daily) {
+      dayDisplay = hasEntries ? '&#10003;' : '—';
+    } else {
+      dayDisplay = hasEntries ? dayHours.toFixed(1) + 'h' : '—';
+    }
     grid.innerHTML += `
       <div class="week-day ${hasEntries ? 'has-entries' : ''}" onclick="openLogDay('${isoDate(d)}')">
         <span class="week-day-name">${DAY_NAMES[i]}</span>
@@ -1031,16 +1169,24 @@ async function loadDayView() {
     dayEntries.forEach(e => {
       const hours = parseFloat(e.calculated_hours || 0);
       totalHours += hours;
-      const timesText = daily
-        ? 'Present' + (e.notes ? ' · ' + esc(e.notes) : '')
-        : e.start_time.slice(0,5) + ' – ' + e.end_time.slice(0,5) + ' (' + e.break_minutes + 'min break)' + (e.notes ? ' · ' + esc(e.notes) : '');
+      const type = e.entry_type || 'work';
+      const badge = entryTypeBadge(type);
+      let timesText;
+      if (isLeaveType(type)) {
+        timesText = entryTypeLabel(type) + (e.notes ? ' · ' + esc(e.notes) : '');
+      } else if (daily) {
+        timesText = (type === 'half_day_work' ? 'Half Day' : 'Present') + (e.notes ? ' · ' + esc(e.notes) : '');
+      } else {
+        timesText = e.start_time.slice(0,5) + ' – ' + e.end_time.slice(0,5) + ' (' + e.break_minutes + 'min break)' + (e.notes ? ' · ' + esc(e.notes) : '');
+      }
+      const hoursDisplay = isLeaveType(type) ? entryTypeLabel(type) : (daily ? (type === 'half_day_work' ? '½ day' : '1 day') : hours.toFixed(1) + 'h');
       html += `
         <div class="entry-row">
           <div class="entry-info">
-            <div class="entry-project">${esc(e.project_name)}</div>
+            <div class="entry-project">${e.project_name ? esc(e.project_name) : badge}</div>
             <div class="entry-times">${timesText}</div>
           </div>
-          <div class="entry-hours">${daily ? '1 day' : hours.toFixed(1) + 'h'}</div>
+          <div class="entry-hours">${hoursDisplay}</div>
           ${locked ? '' : `<button class="entry-del" onclick="deleteTimeEntry('${e.id}')" title="Delete">×</button>`}
         </div>`;
     });
@@ -1050,6 +1196,8 @@ async function loadDayView() {
   }
 
   // Reset form
+  document.getElementById('entry-type').value = 'work';
+  onEntryTypeChange();
   document.getElementById('entry-project').value = '';
   document.getElementById('entry-start').value = '08:00';
   document.getElementById('entry-end').value = '16:30';
@@ -1064,48 +1212,88 @@ async function saveTimeEntry() {
   const today = new Date(); today.setHours(0,0,0,0);
   if (selectedDate > today) return toast('Cannot log time for future dates');
 
-  const project = document.getElementById('entry-project').value;
-  const notes   = document.getElementById('entry-notes').value.trim();
-  if (!project) return toast('Select a project');
+  const entryType = document.getElementById('entry-type').value;
+  const notes = document.getElementById('entry-notes').value.trim();
+  let project, start, end, brk;
 
-  let start, end, brk;
+  if (isLeaveType(entryType)) {
+    // Leave entry — no project or times needed
+    project = null;
+    start = '08:00'; end = '16:30'; brk = 30;
 
-  if (isDailyRate()) {
-    // Check for duplicate — one entry per day for daily rate
+    // Check for duplicate leave on this day
     const { data: existing } = await sb.from('time_entries')
-      .select('id')
-      .eq('employee_id', WMEAuth.getEmployeeId())
-      .eq('entry_date', isoDate(selectedDate))
-      .limit(1);
-    if (existing && existing.length > 0) return toast('Already logged for this day');
-    start = '08:00';
-    end   = '16:30';
-    brk   = 30;
-  } else {
-    start = document.getElementById('entry-start').value;
-    end   = document.getElementById('entry-end').value;
-    brk   = parseInt(document.getElementById('entry-break').value) || 0;
-    if (!start || !end) return toast('Enter start and end times');
-    if (end <= start) return toast('End time must be after start time');
-    if (brk < 0) return toast('Break cannot be negative');
-
-    // Minimum break enforcement (UK Working Time Regulations)
-    const [sh, sm] = start.split(':').map(Number);
-    const [eh, em] = end.split(':').map(Number);
-    const spanMins = (eh * 60 + em) - (sh * 60 + sm);
-    if (spanMins > 360 && brk < 30) return toast('Minimum 30-minute break required for shifts over 6 hours');
-
-    const hours = calcHours(start, end, brk);
-    if (hours <= 0) return toast('No working hours — check break time');
-
-    // Duplicate/overlap prevention for hourly employees
-    const { data: dayEntries } = await sb.from('time_entries')
-      .select('start_time, end_time')
+      .select('id, entry_type')
       .eq('employee_id', WMEAuth.getEmployeeId())
       .eq('entry_date', isoDate(selectedDate));
-    if (dayEntries && dayEntries.length > 0) {
-      const overlap = dayEntries.find(e => start < e.end_time && end > e.start_time);
-      if (overlap) return toast('Overlaps with existing entry (' + overlap.start_time.slice(0,5) + '–' + overlap.end_time.slice(0,5) + ')');
+    if (existing && existing.length > 0) {
+      // Allow half_day_holiday + half_day_work combo
+      if (entryType === 'half_day_holiday') {
+        const hasHalfWork = existing.some(e => e.entry_type === 'half_day_work');
+        const hasLeave = existing.some(e => isLeaveType(e.entry_type));
+        if (hasLeave) return toast('Leave already logged for this day');
+        if (!hasHalfWork && existing.length > 0) return toast('Day already has entries');
+      } else {
+        return toast('Already logged for this day');
+      }
+    }
+
+    // Holiday allowance check
+    if (entryType === 'holiday' || entryType === 'half_day_holiday') {
+      const hol = await getHolidaysRemaining();
+      const needed = entryType === 'half_day_holiday' ? 0.5 : 1;
+      if (hol.remaining < needed) return toast('No holiday remaining (' + hol.used + '/' + hol.allowance + ' used)');
+    }
+  } else {
+    // Work entry (work or half_day_work)
+    project = document.getElementById('entry-project').value;
+    if (!project) return toast('Select a project');
+
+    if (isDailyRate()) {
+      const { data: existing } = await sb.from('time_entries')
+        .select('id, entry_type')
+        .eq('employee_id', WMEAuth.getEmployeeId())
+        .eq('entry_date', isoDate(selectedDate));
+      if (existing && existing.length > 0) {
+        if (entryType === 'half_day_work') {
+          const hasHalfHol = existing.some(e => e.entry_type === 'half_day_holiday');
+          const hasWork = existing.some(e => WORK_TYPES.includes(e.entry_type));
+          if (hasWork) return toast('Work already logged for this day');
+          if (!hasHalfHol && existing.length > 0) return toast('Day already has entries');
+        } else {
+          return toast('Already logged for this day');
+        }
+      }
+      start = entryType === 'half_day_work' ? '08:00' : '08:00';
+      end   = entryType === 'half_day_work' ? '12:30' : '16:30';
+      brk   = entryType === 'half_day_work' ? 0 : 30;
+    } else {
+      start = document.getElementById('entry-start').value;
+      end   = document.getElementById('entry-end').value;
+      brk   = parseInt(document.getElementById('entry-break').value) || 0;
+      if (!start || !end) return toast('Enter start and end times');
+      if (end <= start) return toast('End time must be after start time');
+      if (brk < 0) return toast('Break cannot be negative');
+
+      // Minimum break enforcement (UK Working Time Regulations)
+      const [sh, sm] = start.split(':').map(Number);
+      const [eh, em] = end.split(':').map(Number);
+      const spanMins = (eh * 60 + em) - (sh * 60 + sm);
+      if (spanMins > 360 && brk < 30) return toast('Minimum 30-minute break required for shifts over 6 hours');
+
+      const hours = calcHours(start, end, brk);
+      if (hours <= 0) return toast('No working hours — check break time');
+
+      // Overlap prevention
+      const { data: dayEntries } = await sb.from('time_entries')
+        .select('start_time, end_time')
+        .eq('employee_id', WMEAuth.getEmployeeId())
+        .eq('entry_date', isoDate(selectedDate))
+        .in('entry_type', ['work', 'half_day_work']);
+      if (dayEntries && dayEntries.length > 0) {
+        const overlap = dayEntries.find(e => start < e.end_time && end > e.start_time);
+        if (overlap) return toast('Overlaps with existing entry (' + overlap.start_time.slice(0,5) + '–' + overlap.end_time.slice(0,5) + ')');
+      }
     }
   }
 
@@ -1116,6 +1304,7 @@ async function saveTimeEntry() {
     start_time: start,
     end_time: end,
     break_minutes: brk,
+    entry_type: entryType,
     notes: notes || null
   });
 
@@ -1189,26 +1378,61 @@ async function openBulkEntry() {
     const dimStyle = disabled ? 'opacity:0.5' : '';
 
     html += `<div class="card" style="margin-bottom:8px;padding:12px 14px;${dimStyle}" id="bulk-row-${i}">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:${daily || disabled ? '0' : '8px'}">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:${disabled ? '0' : '8px'}">
         <input type="checkbox" id="bulk-chk-${i}" ${checked} ${disabled ? 'disabled' : ''} onchange="updateBulkTotal()" style="width:20px;height:20px;accent-color:var(--green)" />
         <div style="flex:1">
           <div style="font-weight:600;font-size:14px">${DAY_NAMES[i]}</div>
           <div style="font-size:12px;color:var(--muted)">${formatDateShort(d)}</div>
         </div>
         ${label ? `<span style="font-size:12px;color:var(--muted);font-style:italic">${label}</span>` : ''}
-        ${!daily && !disabled ? `<span style="font-size:14px;font-weight:600;color:var(--green)" id="bulk-hrs-${i}">8.0h</span>` : ''}
+        ${!disabled ? `<span style="font-size:14px;font-weight:600;color:var(--green)" id="bulk-hrs-${i}">8.0h</span>` : ''}
       </div>
-      ${!daily && !disabled ? `
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-        <div class="field" style="margin:0"><label style="font-size:11px">Start</label><input type="time" id="bulk-start-${i}" value="08:00" oninput="updateBulkRow(${i})" /></div>
-        <div class="field" style="margin:0"><label style="font-size:11px">End</label><input type="time" id="bulk-end-${i}" value="16:30" oninput="updateBulkRow(${i})" /></div>
-        <div class="field" style="margin:0"><label style="font-size:11px">Break</label><input type="number" id="bulk-brk-${i}" value="30" min="0" step="5" oninput="updateBulkRow(${i})" /></div>
+      ${!disabled ? `
+      <div class="field" style="margin:0 0 8px 0">
+        <select id="bulk-type-${i}" onchange="onBulkTypeChange(${i})" style="font-size:13px;padding:6px 8px">
+          <option value="work">Work</option>
+          <option value="half_day_work">Half Day Work</option>
+          <option value="holiday">Holiday</option>
+          <option value="half_day_holiday">Half Day Holiday</option>
+          <option value="sick">Sick</option>
+          <option value="absent">Absent</option>
+        </select>
+      </div>
+      <div id="bulk-time-row-${i}" ${daily ? 'style="display:none"' : ''}>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <div class="field" style="margin:0"><label style="font-size:11px">Start</label><input type="time" id="bulk-start-${i}" value="08:00" oninput="updateBulkRow(${i})" /></div>
+          <div class="field" style="margin:0"><label style="font-size:11px">End</label><input type="time" id="bulk-end-${i}" value="16:30" oninput="updateBulkRow(${i})" /></div>
+          <div class="field" style="margin:0"><label style="font-size:11px">Break</label><input type="number" id="bulk-brk-${i}" value="30" min="0" step="5" oninput="updateBulkRow(${i})" /></div>
+        </div>
       </div>` : ''}
     </div>`;
   });
   container.innerHTML = html;
   updateBulkTotal();
   showScreen('scr-bulk');
+}
+
+function onBulkTypeChange(i) {
+  const type = document.getElementById('bulk-type-' + i)?.value || 'work';
+  const timeRow = document.getElementById('bulk-time-row-' + i);
+  const hrsEl = document.getElementById('bulk-hrs-' + i);
+
+  if (isLeaveType(type)) {
+    if (timeRow) timeRow.style.display = 'none';
+    if (hrsEl) hrsEl.textContent = type === 'half_day_holiday' ? '½ day' : entryTypeLabel(type);
+  } else if (type === 'half_day_work') {
+    if (timeRow && !isDailyRate()) {
+      timeRow.style.display = '';
+      document.getElementById('bulk-start-' + i).value = '08:00';
+      document.getElementById('bulk-end-' + i).value = '12:30';
+      document.getElementById('bulk-brk-' + i).value = '0';
+    }
+    if (hrsEl) hrsEl.textContent = isDailyRate() ? '½ day' : '4.5h';
+  } else {
+    if (timeRow && !isDailyRate()) timeRow.style.display = '';
+    updateBulkRow(i);
+  }
+  updateBulkTotal();
 }
 
 function updateBulkDefaults() {
@@ -1218,6 +1442,8 @@ function updateBulkDefaults() {
   for (let i = 0; i < 5; i++) {
     const chk = document.getElementById('bulk-chk-' + i);
     if (!chk || chk.disabled) continue;
+    const type = document.getElementById('bulk-type-' + i)?.value || 'work';
+    if (type !== 'work') continue; // Only update work rows
     const s = document.getElementById('bulk-start-' + i);
     const e = document.getElementById('bulk-end-' + i);
     const b = document.getElementById('bulk-brk-' + i);
@@ -1261,19 +1487,28 @@ function updateBulkTotal() {
 
 async function saveBulkEntries() {
   const project = document.getElementById('bulk-project').value;
-  if (!project) return toast('Select a project');
-
   const dates = getWeekDates(currentWeekStart);
   const daily = isDailyRate();
   const rows = [];
+  let holidayDaysNeeded = 0;
 
   for (let i = 0; i < 5; i++) {
     const chk = document.getElementById('bulk-chk-' + i);
     if (!chk || !chk.checked) continue;
 
+    const entryType = document.getElementById('bulk-type-' + i)?.value || 'work';
     let start, end, brk;
-    if (daily) {
+
+    if (isLeaveType(entryType)) {
       start = '08:00'; end = '16:30'; brk = 30;
+      if (entryType === 'holiday') holidayDaysNeeded += 1;
+      if (entryType === 'half_day_holiday') holidayDaysNeeded += 0.5;
+    } else if (!project) {
+      return toast('Select a project for work days');
+    } else if (daily || entryType === 'half_day_work') {
+      start = entryType === 'half_day_work' ? '08:00' : '08:00';
+      end   = entryType === 'half_day_work' ? '12:30' : '16:30';
+      brk   = entryType === 'half_day_work' ? 0 : 30;
     } else {
       start = document.getElementById('bulk-start-' + i).value;
       end   = document.getElementById('bulk-end-' + i).value;
@@ -1283,7 +1518,6 @@ async function saveBulkEntries() {
       if (end <= start) return toast(DAY_NAMES[i] + ': End time must be after start time');
       if (brk < 0) return toast(DAY_NAMES[i] + ': Break cannot be negative');
 
-      // Break enforcement
       const [sh, sm] = start.split(':').map(Number);
       const [eh, em] = end.split(':').map(Number);
       const spanMins = (eh * 60 + em) - (sh * 60 + sm);
@@ -1295,12 +1529,19 @@ async function saveBulkEntries() {
 
     rows.push({
       employee_id: WMEAuth.getEmployeeId(),
-      project_name: project,
+      project_name: isLeaveType(entryType) ? null : project,
       entry_date: isoDate(dates[i]),
       start_time: start,
       end_time: end,
-      break_minutes: brk
+      break_minutes: brk,
+      entry_type: entryType
     });
+  }
+
+  // Holiday allowance check
+  if (holidayDaysNeeded > 0) {
+    const hol = await getHolidaysRemaining();
+    if (hol.remaining < holidayDaysNeeded) return toast('Not enough holiday remaining (' + hol.remaining + ' days left, need ' + holidayDaysNeeded + ')');
   }
 
   if (rows.length === 0) return toast('No days selected');
@@ -1398,16 +1639,28 @@ async function loadWeekView() {
     let entriesHtml = '';
     if (hasEntries) {
       dayEntries.forEach(e => {
-        const detail = daily
-          ? esc(e.project_name) + ' · Present'
-          : esc(e.project_name) + ' · ' + e.start_time.slice(0,5) + '–' + e.end_time.slice(0,5) + ' · ' + parseFloat(e.calculated_hours).toFixed(1) + 'h';
+        const type = e.entry_type || 'work';
+        let detail;
+        if (isLeaveType(type)) {
+          detail = entryTypeLabel(type) + (e.notes ? ' · ' + esc(e.notes) : '');
+        } else if (daily) {
+          detail = esc(e.project_name) + ' · ' + (type === 'half_day_work' ? 'Half Day' : 'Present');
+        } else {
+          detail = esc(e.project_name) + ' · ' + e.start_time.slice(0,5) + '–' + e.end_time.slice(0,5) + ' · ' + parseFloat(e.calculated_hours).toFixed(1) + 'h';
+        }
         entriesHtml += `<div style="font-size:12px;color:var(--muted);padding:2px 0 2px 46px">${detail}</div>`;
       });
     }
 
-    const dayDisplay = daily
-      ? (hasEntries ? '&#10003;' : '—')
-      : (hasEntries ? dayHours.toFixed(1) + 'h' : '—');
+    const leaveEntry = dayEntries.find(e => isLeaveType(e.entry_type));
+    let dayDisplay;
+    if (leaveEntry) {
+      dayDisplay = entryTypeBadge(leaveEntry.entry_type);
+    } else if (daily) {
+      dayDisplay = hasEntries ? '&#10003;' : '—';
+    } else {
+      dayDisplay = hasEntries ? dayHours.toFixed(1) + 'h' : '—';
+    }
     grid.innerHTML += `
       <div>
         <div class="week-day ${hasEntries ? 'has-entries' : ''}" onclick="openLogDay('${isoDate(d)}')">
@@ -1443,7 +1696,7 @@ async function submitTimesheet() {
 
   // Calculate totals
   const { data: entries } = await sb.from('time_entries')
-    .select('calculated_hours, entry_date')
+    .select('calculated_hours, entry_date, entry_type')
     .eq('employee_id', WMEAuth.getEmployeeId())
     .gte('entry_date', isoDate(monday))
     .lte('entry_date', isoDate(friday));
@@ -1453,15 +1706,31 @@ async function submitTimesheet() {
 
   const totalHours = weekEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
 
-  // Calculate cost
+  // Calculate cost — factoring in entry types and pay policies
+  const emp = WMEAuth.getEmployee();
+  const rate = parseFloat(emp.rate);
   let totalCost = 0;
-  if (WMEAuth.getEmployee().rate_type === 'hourly') {
-    totalCost = totalHours * parseFloat(WMEAuth.getEmployee().rate);
-  } else if (WMEAuth.getEmployee().rate_type === 'daily') {
-    const uniqueDays = new Set(weekEntries.map(e => e.entry_date)).size;
-    totalCost = uniqueDays * parseFloat(WMEAuth.getEmployee().rate);
-  } else if (WMEAuth.getEmployee().rate_type === 'salary') {
-    totalCost = parseFloat(WMEAuth.getEmployee().rate) / 52;
+
+  if (emp.rate_type === 'hourly') {
+    weekEntries.forEach(e => {
+      const type = e.entry_type || 'work';
+      const hrs = parseFloat(e.calculated_hours || 0);
+      if (type === 'work' || type === 'half_day_work') totalCost += hrs * rate;
+      else if (type === 'holiday' || type === 'half_day_holiday') totalCost += hrs * rate; // Holiday always paid
+      else if (type === 'sick') totalCost += emp.sick_pay === 'paid' ? hrs * rate : 0;
+      else if (type === 'absent') totalCost += emp.absent_pay === 'paid' ? hrs * rate : 0;
+    });
+  } else if (emp.rate_type === 'daily') {
+    weekEntries.forEach(e => {
+      const type = e.entry_type || 'work';
+      const dayVal = (type === 'half_day_work' || type === 'half_day_holiday') ? rate * 0.5 : rate;
+      if (type === 'work' || type === 'half_day_work') totalCost += dayVal;
+      else if (type === 'holiday' || type === 'half_day_holiday') totalCost += dayVal;
+      else if (type === 'sick') totalCost += emp.sick_pay === 'paid' ? dayVal : 0;
+      else if (type === 'absent') totalCost += emp.absent_pay === 'paid' ? dayVal : 0;
+    });
+  } else if (emp.rate_type === 'salary') {
+    totalCost = rate / 52;
   }
 
   // Upsert timesheet
@@ -1672,7 +1941,7 @@ async function loadEmployeeList() {
       <div class="emp-row" style="opacity:${e.active ? 1 : 0.5}">
         <div class="emp-info">
           <div class="emp-name">${esc(e.display_name)}${activeTag}</div>
-          <div class="emp-detail">${esc(e.role)} · ${esc(e.employment_type)} · ${esc(e.auth_email || 'No login')}</div>
+          <div class="emp-detail">${esc(e.role)} · ${esc(e.employment_type)} · ${esc(e.auth_email || 'No login')} · ${e.holiday_allowance} days hol</div>
         </div>
         <div class="emp-rate">£${parseFloat(e.rate).toFixed(2)}${rateLabel}</div>
         <div style="display:flex;gap:4px">
@@ -1692,6 +1961,9 @@ async function addEmployee() {
   const employment = document.getElementById('emp-employment').value;
   const rateType = document.getElementById('emp-ratetype').value;
   const rate = parseFloat(document.getElementById('emp-rate').value) || 0;
+  const sickPay = document.getElementById('emp-sickpay').value;
+  const absentPay = document.getElementById('emp-absentpay').value;
+  const holidays = parseInt(document.getElementById('emp-holidays').value) || 21;
 
   if (!first || !last) return toast('Enter first and last name');
 
@@ -1702,7 +1974,10 @@ async function addEmployee() {
     role,
     employment_type: employment,
     rate_type: rateType,
-    rate
+    rate,
+    sick_pay: sickPay,
+    absent_pay: absentPay,
+    holiday_allowance: holidays
   });
 
   if (error) return toast('Error: ' + error.message, 4000);
@@ -1712,6 +1987,7 @@ async function addEmployee() {
   document.getElementById('emp-last').value = '';
   document.getElementById('emp-email').value = '';
   document.getElementById('emp-rate').value = '0';
+  document.getElementById('emp-holidays').value = '21';
   await loadEmployeeList();
 }
 
@@ -1727,6 +2003,9 @@ async function editEmployee(id) {
   document.getElementById('edit-employment').value = emp.employment_type;
   document.getElementById('edit-ratetype').value = emp.rate_type;
   document.getElementById('edit-rate').value = emp.rate;
+  document.getElementById('edit-sickpay').value = emp.sick_pay || 'paid';
+  document.getElementById('edit-absentpay').value = emp.absent_pay || 'unpaid';
+  document.getElementById('edit-holidays').value = emp.holiday_allowance ?? 21;
 
   // Non-admins can't assign admin role
   const adminOpt = document.querySelector('#edit-role option[value="admin"]');
@@ -1745,6 +2024,9 @@ async function saveEditEmployee() {
   const employment = document.getElementById('edit-employment').value;
   const rateType   = document.getElementById('edit-ratetype').value;
   const rate  = parseFloat(document.getElementById('edit-rate').value) || 0;
+  const sickPay = document.getElementById('edit-sickpay').value;
+  const absentPay = document.getElementById('edit-absentpay').value;
+  const holidays = parseInt(document.getElementById('edit-holidays').value) || 21;
 
   if (!first || !last) return toast('First and last name required');
 
@@ -1755,7 +2037,10 @@ async function saveEditEmployee() {
     role,
     employment_type: employment,
     rate_type: rateType,
-    rate
+    rate,
+    sick_pay: sickPay,
+    absent_pay: absentPay,
+    holiday_allowance: holidays
   }).eq('id', id);
 
   if (error) return toast('Error: ' + error.message, 4000);
