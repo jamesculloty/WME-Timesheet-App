@@ -283,6 +283,12 @@
         <div class="stat"><div class="stat-n" id="stat-week">—</div><div class="stat-l">Current week</div></div>
       </div>
 
+      <div id="submit-reminder" style="display:none;background:#FDF6E3;border:1.5px solid #B8860B;border-radius:10px;padding:14px 16px;margin-bottom:14px">
+        <div style="font-weight:600;color:#7A5000;margin-bottom:4px">Timesheet not submitted</div>
+        <div style="font-size:13px;color:#7A5000;margin-bottom:10px">Please review and submit your timesheet for this week.</div>
+        <button class="btn btn-primary" onclick="submitTimesheet()" style="background:#B8860B">Submit Now</button>
+      </div>
+
       <div class="card">
         <div class="card-title" id="dash-week-label">This Week</div>
         <div class="week-grid" id="dash-week-grid"></div>
@@ -291,6 +297,7 @@
           <span class="total-bar-val" id="dash-week-total">0 hrs</span>
         </div>
         <button class="btn btn-primary" id="dash-submit-btn" onclick="submitTimesheet()" disabled>Submit Timesheet</button>
+        <button class="btn btn-secondary" id="dash-bulk-btn" onclick="openBulkEntry()" style="display:none;margin-top:8px">Log Full Week</button>
       </div>
     </div>
     <nav class="nav">
@@ -345,7 +352,7 @@
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
             <div class="field">
               <label>Start</label>
-              <input type="time" id="entry-start" value="07:00" />
+              <input type="time" id="entry-start" value="08:00" />
             </div>
             <div class="field">
               <label>End</label>
@@ -368,6 +375,53 @@
         </div>
         <button class="btn btn-primary" id="entry-save-btn" onclick="saveTimeEntry()">Save Entry</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ BULK ENTRY ═══════════════════ -->
+  <div id="scr-bulk" class="screen">
+    <div class="hdr">
+      <button class="hdr-back" onclick="showScreen('scr-dash')">&#8592;</button>
+      <div class="hdr-title">Log Full Week</div>
+    </div>
+    <div class="body">
+      <div class="card">
+        <div class="card-title" id="bulk-week-label">Week</div>
+        <div class="field-row">
+          <div class="field">
+            <label>Project</label>
+            <select id="bulk-project"><option value="">Select project...</option></select>
+          </div>
+          <button class="add-btn qa-add-btn" onclick="openAddProjectModal()" title="Add new project">+</button>
+        </div>
+        <div id="bulk-time-defaults">
+          <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px">DEFAULT TIMES</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+            <div class="field">
+              <label>Start</label>
+              <input type="time" id="bulk-def-start" value="08:00" oninput="updateBulkDefaults()" />
+            </div>
+            <div class="field">
+              <label>End</label>
+              <input type="time" id="bulk-def-end" value="16:30" oninput="updateBulkDefaults()" />
+            </div>
+            <div class="field">
+              <label>Break</label>
+              <input type="number" id="bulk-def-break" value="30" min="0" step="5" oninput="updateBulkDefaults()" />
+            </div>
+          </div>
+        </div>
+        <div id="bulk-daily-msg" class="info-box" style="display:none">Day rate — tick the days you worked this week.</div>
+      </div>
+
+      <div id="bulk-days"></div>
+
+      <div class="total-bar" id="bulk-total-bar">
+        <span class="total-bar-label">Week Total</span>
+        <span class="total-bar-val" id="bulk-total">0 hrs</span>
+      </div>
+
+      <button class="btn btn-primary" id="bulk-save-btn" onclick="saveBulkEntries()">Save All Entries</button>
     </div>
   </div>
 
@@ -764,6 +818,24 @@ function updateEntryCalc() {
   const brk   = parseInt(document.getElementById('entry-break').value) || 0;
   const hours = calcHours(start, end, brk);
   document.getElementById('entry-calc-hours').textContent = hours.toFixed(1);
+
+  // Break warning
+  let warn = document.getElementById('break-warning');
+  if (!warn) {
+    warn = document.createElement('div');
+    warn.id = 'break-warning';
+    warn.style.cssText = 'color:#B8860B;font-size:12px;margin-top:-8px;margin-bottom:8px';
+    const breakField = document.getElementById('entry-break').parentElement;
+    breakField.parentElement.insertBefore(warn, breakField.nextSibling);
+  }
+  if (start && end) {
+    const [sh, sm] = start.split(':').map(Number);
+    const [eh, em] = end.split(':').map(Number);
+    const spanMins = (eh * 60 + em) - (sh * 60 + sm);
+    warn.textContent = (spanMins > 360 && brk < 30) ? 'Minimum 30-min break required for shifts over 6 hours' : '';
+  } else {
+    warn.textContent = '';
+  }
 }
 
 // ── DASHBOARD ────────────────────────────────────────────────
@@ -862,6 +934,26 @@ async function loadDashboard() {
   } else {
     submitBtn.style.display = 'none';
   }
+
+  // Auto-submit reminder: show on Friday or later if Draft with entries
+  const reminder = document.getElementById('submit-reminder');
+  const now = new Date();
+  const isCurrentWeek = isoDate(monday) === isoDate(getMonday(now));
+  const isFridayOrLater = now.getDay() >= 5 || now.getDay() === 0;
+  if (isCurrentWeek && isFridayOrLater && status === 'Draft' && weekEntries.length > 0) {
+    reminder.style.display = '';
+  } else {
+    reminder.style.display = 'none';
+  }
+
+  // Bulk entry button: show if Draft/Rejected and not all 5 days logged
+  const bulkBtn = document.getElementById('dash-bulk-btn');
+  const daysLogged = new Set(weekEntries.map(e => e.entry_date)).size;
+  if ((status === 'Draft' || status === 'Rejected') && daysLogged < 5) {
+    bulkBtn.style.display = '';
+  } else {
+    bulkBtn.style.display = 'none';
+  }
 }
 
 // ── LOG DAY ──────────────────────────────────────────────────
@@ -884,15 +976,23 @@ function prevDay() {
 }
 
 function nextDay() {
-  selectedDate.setDate(selectedDate.getDate() + 1);
-  // Skip weekends
-  if (selectedDate.getDay() === 0) selectedDate.setDate(selectedDate.getDate() + 1);
-  if (selectedDate.getDay() === 6) selectedDate.setDate(selectedDate.getDate() + 1);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const next = new Date(selectedDate);
+  next.setDate(next.getDate() + 1);
+  if (next.getDay() === 0) next.setDate(next.getDate() + 1);
+  if (next.getDay() === 6) next.setDate(next.getDate() + 1);
+  if (next > today) return; // Cannot navigate to future dates
+  selectedDate = next;
   loadDayView();
 }
 
 async function loadDayView() {
   document.getElementById('log-day-title').textContent = formatDate(selectedDate);
+
+  // Disable next-day button if at today or beyond
+  const today = new Date(); today.setHours(0,0,0,0);
+  const nextBtn = document.querySelector('#scr-log-day .hdr button[onclick="nextDay()"]');
+  if (nextBtn) nextBtn.style.opacity = selectedDate >= today ? '0.3' : '1';
 
   // Check if this week's timesheet is submitted/approved
   const monday = getMonday(selectedDate);
@@ -951,7 +1051,7 @@ async function loadDayView() {
 
   // Reset form
   document.getElementById('entry-project').value = '';
-  document.getElementById('entry-start').value = '07:00';
+  document.getElementById('entry-start').value = '08:00';
   document.getElementById('entry-end').value = '16:30';
   document.getElementById('entry-break').value = '30';
   document.getElementById('entry-notes').value = '';
@@ -960,6 +1060,10 @@ async function loadDayView() {
 
 // ── SAVE TIME ENTRY ──────────────────────────────────────────
 async function saveTimeEntry() {
+  // Prevent future date entries
+  const today = new Date(); today.setHours(0,0,0,0);
+  if (selectedDate > today) return toast('Cannot log time for future dates');
+
   const project = document.getElementById('entry-project').value;
   const notes   = document.getElementById('entry-notes').value.trim();
   if (!project) return toast('Select a project');
@@ -974,7 +1078,7 @@ async function saveTimeEntry() {
       .eq('entry_date', isoDate(selectedDate))
       .limit(1);
     if (existing && existing.length > 0) return toast('Already logged for this day');
-    start = '07:00';
+    start = '08:00';
     end   = '16:30';
     brk   = 30;
   } else {
@@ -984,8 +1088,25 @@ async function saveTimeEntry() {
     if (!start || !end) return toast('Enter start and end times');
     if (end <= start) return toast('End time must be after start time');
     if (brk < 0) return toast('Break cannot be negative');
+
+    // Minimum break enforcement (UK Working Time Regulations)
+    const [sh, sm] = start.split(':').map(Number);
+    const [eh, em] = end.split(':').map(Number);
+    const spanMins = (eh * 60 + em) - (sh * 60 + sm);
+    if (spanMins > 360 && brk < 30) return toast('Minimum 30-minute break required for shifts over 6 hours');
+
     const hours = calcHours(start, end, brk);
     if (hours <= 0) return toast('No working hours — check break time');
+
+    // Duplicate/overlap prevention for hourly employees
+    const { data: dayEntries } = await sb.from('time_entries')
+      .select('start_time, end_time')
+      .eq('employee_id', WMEAuth.getEmployeeId())
+      .eq('entry_date', isoDate(selectedDate));
+    if (dayEntries && dayEntries.length > 0) {
+      const overlap = dayEntries.find(e => start < e.end_time && end > e.start_time);
+      if (overlap) return toast('Overlaps with existing entry (' + overlap.start_time.slice(0,5) + '–' + overlap.end_time.slice(0,5) + ')');
+    }
   }
 
   const { error } = await sb.from('time_entries').insert({
@@ -1018,6 +1139,197 @@ async function deleteTimeEntry(id) {
   if (error) return toast('Error: ' + error.message, 4000);
   toast('Entry deleted');
   loadDayView();
+}
+
+// ── BULK TIME ENTRY ─────────────────────────────────────────
+let bulkExisting = {}; // { 'YYYY-MM-DD': true }
+
+async function openBulkEntry() {
+  const monday = currentWeekStart;
+  const friday = new Date(monday); friday.setDate(friday.getDate() + 4);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const daily = isDailyRate();
+
+  document.getElementById('bulk-week-label').textContent = 'Week: ' + formatWeekRange(monday);
+  document.getElementById('bulk-time-defaults').style.display = daily ? 'none' : '';
+  document.getElementById('bulk-daily-msg').style.display = daily ? '' : 'none';
+  document.getElementById('bulk-total-bar').style.display = daily ? 'none' : '';
+
+  // Populate project dropdown
+  const sel = document.getElementById('bulk-project');
+  sel.innerHTML = '<option value="">Select project...</option>';
+  projects.forEach(p => { sel.innerHTML += `<option value="${esc(p.name)}">${esc(p.name)}</option>`; });
+
+  // Reset defaults
+  document.getElementById('bulk-def-start').value = '08:00';
+  document.getElementById('bulk-def-end').value = '16:30';
+  document.getElementById('bulk-def-break').value = '30';
+
+  // Load existing entries for this week
+  const { data: entries } = await sb.from('time_entries')
+    .select('entry_date')
+    .eq('employee_id', WMEAuth.getEmployeeId())
+    .gte('entry_date', isoDate(monday))
+    .lte('entry_date', isoDate(friday));
+
+  bulkExisting = {};
+  (entries || []).forEach(e => { bulkExisting[e.entry_date] = true; });
+
+  // Render 5 day rows
+  const dates = getWeekDates(monday);
+  const container = document.getElementById('bulk-days');
+  let html = '';
+  dates.forEach((d, i) => {
+    const iso = isoDate(d);
+    const hasEntry = bulkExisting[iso];
+    const isFuture = d > today;
+    const disabled = hasEntry || isFuture;
+    const label = hasEntry ? 'Already logged' : (isFuture ? 'Future' : '');
+    const checked = !disabled ? 'checked' : '';
+    const dimStyle = disabled ? 'opacity:0.5' : '';
+
+    html += `<div class="card" style="margin-bottom:8px;padding:12px 14px;${dimStyle}" id="bulk-row-${i}">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:${daily || disabled ? '0' : '8px'}">
+        <input type="checkbox" id="bulk-chk-${i}" ${checked} ${disabled ? 'disabled' : ''} onchange="updateBulkTotal()" style="width:20px;height:20px;accent-color:var(--green)" />
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:14px">${DAY_NAMES[i]}</div>
+          <div style="font-size:12px;color:var(--muted)">${formatDateShort(d)}</div>
+        </div>
+        ${label ? `<span style="font-size:12px;color:var(--muted);font-style:italic">${label}</span>` : ''}
+        ${!daily && !disabled ? `<span style="font-size:14px;font-weight:600;color:var(--green)" id="bulk-hrs-${i}">8.0h</span>` : ''}
+      </div>
+      ${!daily && !disabled ? `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <div class="field" style="margin:0"><label style="font-size:11px">Start</label><input type="time" id="bulk-start-${i}" value="08:00" oninput="updateBulkRow(${i})" /></div>
+        <div class="field" style="margin:0"><label style="font-size:11px">End</label><input type="time" id="bulk-end-${i}" value="16:30" oninput="updateBulkRow(${i})" /></div>
+        <div class="field" style="margin:0"><label style="font-size:11px">Break</label><input type="number" id="bulk-brk-${i}" value="30" min="0" step="5" oninput="updateBulkRow(${i})" /></div>
+      </div>` : ''}
+    </div>`;
+  });
+  container.innerHTML = html;
+  updateBulkTotal();
+  showScreen('scr-bulk');
+}
+
+function updateBulkDefaults() {
+  const start = document.getElementById('bulk-def-start').value;
+  const end   = document.getElementById('bulk-def-end').value;
+  const brk   = document.getElementById('bulk-def-break').value;
+  for (let i = 0; i < 5; i++) {
+    const chk = document.getElementById('bulk-chk-' + i);
+    if (!chk || chk.disabled) continue;
+    const s = document.getElementById('bulk-start-' + i);
+    const e = document.getElementById('bulk-end-' + i);
+    const b = document.getElementById('bulk-brk-' + i);
+    if (s) s.value = start;
+    if (e) e.value = end;
+    if (b) b.value = brk;
+    updateBulkRow(i);
+  }
+}
+
+function updateBulkRow(i) {
+  const s = document.getElementById('bulk-start-' + i);
+  const e = document.getElementById('bulk-end-' + i);
+  const b = document.getElementById('bulk-brk-' + i);
+  const h = document.getElementById('bulk-hrs-' + i);
+  if (s && e && b && h) {
+    const hours = calcHours(s.value, e.value, parseInt(b.value) || 0);
+    h.textContent = hours.toFixed(1) + 'h';
+  }
+  updateBulkTotal();
+}
+
+function updateBulkTotal() {
+  const daily = isDailyRate();
+  let total = 0;
+  for (let i = 0; i < 5; i++) {
+    const chk = document.getElementById('bulk-chk-' + i);
+    if (!chk || !chk.checked) continue;
+    if (daily) {
+      total += 1;
+    } else {
+      const s = document.getElementById('bulk-start-' + i);
+      const e = document.getElementById('bulk-end-' + i);
+      const b = document.getElementById('bulk-brk-' + i);
+      if (s && e && b) total += calcHours(s.value, e.value, parseInt(b.value) || 0);
+    }
+  }
+  const el = document.getElementById('bulk-total');
+  if (el) el.textContent = daily ? total + (total === 1 ? ' day' : ' days') : total.toFixed(1) + ' hrs';
+}
+
+async function saveBulkEntries() {
+  const project = document.getElementById('bulk-project').value;
+  if (!project) return toast('Select a project');
+
+  const dates = getWeekDates(currentWeekStart);
+  const daily = isDailyRate();
+  const rows = [];
+
+  for (let i = 0; i < 5; i++) {
+    const chk = document.getElementById('bulk-chk-' + i);
+    if (!chk || !chk.checked) continue;
+
+    let start, end, brk;
+    if (daily) {
+      start = '08:00'; end = '16:30'; brk = 30;
+    } else {
+      start = document.getElementById('bulk-start-' + i).value;
+      end   = document.getElementById('bulk-end-' + i).value;
+      brk   = parseInt(document.getElementById('bulk-brk-' + i).value) || 0;
+
+      if (!start || !end) return toast(DAY_NAMES[i] + ': Enter start and end times');
+      if (end <= start) return toast(DAY_NAMES[i] + ': End time must be after start time');
+      if (brk < 0) return toast(DAY_NAMES[i] + ': Break cannot be negative');
+
+      // Break enforcement
+      const [sh, sm] = start.split(':').map(Number);
+      const [eh, em] = end.split(':').map(Number);
+      const spanMins = (eh * 60 + em) - (sh * 60 + sm);
+      if (spanMins > 360 && brk < 30) return toast(DAY_NAMES[i] + ': Minimum 30-min break required for shifts over 6 hours');
+
+      const hours = calcHours(start, end, brk);
+      if (hours <= 0) return toast(DAY_NAMES[i] + ': No working hours — check break time');
+    }
+
+    rows.push({
+      employee_id: WMEAuth.getEmployeeId(),
+      project_name: project,
+      entry_date: isoDate(dates[i]),
+      start_time: start,
+      end_time: end,
+      break_minutes: brk
+    });
+  }
+
+  if (rows.length === 0) return toast('No days selected');
+
+  // Safety check: re-verify no duplicates server-side
+  const monday = currentWeekStart;
+  const friday = new Date(monday); friday.setDate(friday.getDate() + 4);
+  const { data: existing } = await sb.from('time_entries')
+    .select('entry_date')
+    .eq('employee_id', WMEAuth.getEmployeeId())
+    .gte('entry_date', isoDate(monday))
+    .lte('entry_date', isoDate(friday));
+
+  const existingDates = new Set((existing || []).map(e => e.entry_date));
+  const filtered = rows.filter(r => !existingDates.has(r.entry_date));
+  if (filtered.length === 0) return toast('All selected days already have entries');
+
+  const { error } = await sb.from('time_entries').insert(filtered);
+  if (error) return toast('Error: ' + (error.message || 'Could not save'), 4000);
+
+  // Reset timesheet to Draft if Rejected
+  await sb.from('timesheets')
+    .update({ status: 'Draft', submitted_at: null, rejection_reason: null })
+    .eq('employee_id', WMEAuth.getEmployeeId())
+    .eq('week_starting', isoDate(monday))
+    .eq('status', 'Rejected');
+
+  toast('Saved ' + filtered.length + (filtered.length === 1 ? ' entry' : ' entries'));
+  showScreen('scr-dash');
 }
 
 // ── WEEK VIEW ────────────────────────────────────────────────
