@@ -624,12 +624,10 @@
   <div id="scr-proxy" class="screen">
     <div class="hdr">
       <button class="hdr-back" onclick="showScreen('scr-admin')">&#8592;</button>
-      <button class="hdr-back" onclick="prevProxyDay()" style="font-size:16px">&#9664;</button>
       <div style="flex:1">
-        <div class="hdr-title" id="proxy-title">Log Time</div>
+        <div class="hdr-title" id="proxy-title">Log Time for Employee</div>
         <div class="hdr-sub" id="proxy-sub"></div>
       </div>
-      <button class="hdr-back" onclick="nextProxyDay()" style="font-size:16px" id="proxy-next-btn">&#9654;</button>
     </div>
     <div class="body">
       <div class="card" style="margin-bottom:12px">
@@ -640,55 +638,41 @@
           </div>
           <div class="field">
             <label>Week</label>
-            <select id="proxy-week" onchange="loadProxyDay()"></select>
+            <select id="proxy-week" onchange="loadProxyWeek()"></select>
           </div>
         </div>
       </div>
 
-      <div id="proxy-entries"></div>
-      <div class="total-bar" id="proxy-total-bar" style="display:none">
-        <span class="total-bar-label">Day Total</span>
-        <span class="total-bar-val" id="proxy-day-total">0 hrs</span>
-      </div>
-
-      <div class="card" id="proxy-form" style="display:none">
-        <div class="card-title">Add Entry</div>
-        <div class="field">
-          <label>Type</label>
-          <select id="proxy-type" onchange="onProxyTypeChange()">
-            <option value="work">Work</option>
-            <option value="half_day_work">Half Day Work</option>
-            <option value="holiday">Holiday</option>
-            <option value="half_day_holiday">Half Day Holiday</option>
-            <option value="sick">Sick</option>
-            <option value="absent">Absent</option>
-          </select>
-        </div>
-        <div id="proxy-work-fields">
+      <!-- Bulk week view (default) -->
+      <div id="proxy-bulk">
+        <div class="card" id="proxy-bulk-form" style="display:none">
+          <div class="card-title">Quick Log — Tick the days worked</div>
           <div class="field-row">
             <div class="field">
               <label>Project</label>
-              <select id="proxy-project"><option value="">Select project...</option></select>
+              <select id="proxy-bulk-project"><option value="">Select project...</option></select>
             </div>
             <button class="add-btn qa-add-btn" onclick="openAddProjectModal()" title="Add new project">+</button>
           </div>
-          <div id="proxy-time-fields">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-              <div class="field"><label>Start</label><input type="time" id="proxy-start" value="08:00" /></div>
-              <div class="field"><label>End</label><input type="time" id="proxy-end" value="16:30" /></div>
-            </div>
-            <div class="field">
-              <label>Break (minutes)</label>
-              <input type="number" id="proxy-break" value="30" min="0" step="5" />
+          <div id="proxy-bulk-time-defaults">
+            <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px">DEFAULT TIMES</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+              <div class="field"><label>Start</label><input type="time" id="proxy-def-start" value="08:00" /></div>
+              <div class="field"><label>End</label><input type="time" id="proxy-def-end" value="16:30" /></div>
+              <div class="field"><label>Break</label><input type="number" id="proxy-def-break" value="30" min="0" step="5" /></div>
             </div>
           </div>
         </div>
-        <div class="field">
-          <label>Notes (optional)</label>
-          <input type="text" id="proxy-notes" placeholder="e.g. First fix, 2nd floor" />
+
+        <div id="proxy-bulk-days"></div>
+
+        <div id="proxy-bulk-save" style="display:none;margin-top:12px">
+          <button class="btn btn-primary" onclick="saveProxyBulk()">Save All Entries</button>
         </div>
-        <button class="btn btn-primary" onclick="saveProxyEntry()">Save Entry</button>
       </div>
+
+      <!-- Existing entries for the week -->
+      <div id="proxy-week-entries" style="margin-top:12px"></div>
 
       <div id="proxy-submit-section" style="display:none;margin-top:12px">
         <button class="btn btn-outline" id="proxy-submit-btn" onclick="submitProxyTimesheet()">Submit This Week for Employee</button>
@@ -2498,10 +2482,8 @@ async function toggleEmployee(id, active) {
 // ── PROXY ENTRY (Manager logs time for employee) ────────────
 let proxyEmployeeId = null;
 let proxyEmployee = null;
-let proxyDate = new Date();
 
 async function openProxyEntry() {
-  // Load active employees into select
   const { data: emps } = await sb.from('employees')
     .select('id, display_name, rate_type, rate, sick_pay, absent_pay')
     .eq('active', true)
@@ -2514,32 +2496,25 @@ async function openProxyEntry() {
     sel.innerHTML += `<option value="${e.id}">${esc(e.display_name)}</option>`;
   });
 
-  // Populate week select with last 8 weeks
+  // Populate week select with last 12 weeks
   const weekSel = document.getElementById('proxy-week');
   weekSel.innerHTML = '';
   const now = new Date();
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 12; i++) {
     const m = getMonday(now);
     m.setDate(m.getDate() - (i * 7));
-    const label = i === 0 ? 'This week' : formatWeekRange(m);
+    const label = (i === 0 ? 'This week — ' : '') + formatWeekRange(m);
     weekSel.innerHTML += `<option value="${isoDate(m)}">${label}</option>`;
   }
 
-  // Populate project select
-  const projSel = document.getElementById('proxy-project');
-  projSel.innerHTML = '<option value="">Select project...</option>';
-  projects.forEach(p => {
-    projSel.innerHTML += `<option value="${esc(p.name)}">${esc(p.name)}</option>`;
-  });
-
   proxyEmployeeId = null;
   proxyEmployee = null;
-  proxyDate = new Date();
-  document.getElementById('proxy-entries').innerHTML = '<div class="empty"><p>Select an employee to begin</p></div>';
-  document.getElementById('proxy-form').style.display = 'none';
-  document.getElementById('proxy-total-bar').style.display = 'none';
+  document.getElementById('proxy-bulk-days').innerHTML = '';
+  document.getElementById('proxy-bulk-form').style.display = 'none';
+  document.getElementById('proxy-bulk-save').style.display = 'none';
+  document.getElementById('proxy-week-entries').innerHTML = '';
   document.getElementById('proxy-submit-section').style.display = 'none';
-  document.getElementById('proxy-title').textContent = 'Log Time';
+  document.getElementById('proxy-title').textContent = 'Log Time for Employee';
   document.getElementById('proxy-sub').textContent = '';
   showScreen('scr-proxy');
 }
@@ -2548,10 +2523,9 @@ function onProxyEmployeeChange() {
   const id = document.getElementById('proxy-employee').value;
   if (!id) { proxyEmployeeId = null; proxyEmployee = null; return; }
   proxyEmployeeId = id;
-  // Fetch employee details for rate type display
   sb.from('employees').select('*').eq('id', id).single().then(({ data }) => {
     proxyEmployee = data;
-    loadProxyDay();
+    loadProxyWeek();
   });
 }
 
@@ -2560,52 +2534,16 @@ function getProxyMonday() {
   return weekVal ? new Date(weekVal + 'T00:00:00') : getMonday(new Date());
 }
 
-function prevProxyDay() {
-  proxyDate.setDate(proxyDate.getDate() - 1);
-  if (proxyDate.getDay() === 0) proxyDate.setDate(proxyDate.getDate() - 2);
-  if (proxyDate.getDay() === 6) proxyDate.setDate(proxyDate.getDate() - 1);
-  // Update week select if we crossed a week boundary
-  const newMonday = getMonday(proxyDate);
-  const weekSel = document.getElementById('proxy-week');
-  const mondayStr = isoDate(newMonday);
-  for (const opt of weekSel.options) {
-    if (opt.value === mondayStr) { weekSel.value = mondayStr; break; }
-  }
-  loadProxyDay();
-}
-
-function nextProxyDay() {
-  const today = new Date(); today.setHours(0,0,0,0);
-  const next = new Date(proxyDate);
-  next.setDate(next.getDate() + 1);
-  if (next.getDay() === 0) next.setDate(next.getDate() + 1);
-  if (next.getDay() === 6) next.setDate(next.getDate() + 1);
-  if (next > today) return;
-  proxyDate = next;
-  const newMonday = getMonday(proxyDate);
-  const weekSel = document.getElementById('proxy-week');
-  const mondayStr = isoDate(newMonday);
-  for (const opt of weekSel.options) {
-    if (opt.value === mondayStr) { weekSel.value = mondayStr; break; }
-  }
-  loadProxyDay();
-}
-
-async function loadProxyDay() {
+async function loadProxyWeek() {
   if (!proxyEmployeeId) return;
 
-  // If called from week selector, reset proxyDate to Monday of that week
   const monday = getProxyMonday();
-  if (isoDate(getMonday(proxyDate)) !== isoDate(monday)) {
-    proxyDate = new Date(monday);
-  }
-
+  const friday = new Date(monday); friday.setDate(friday.getDate() + 4);
   const today = new Date(); today.setHours(0,0,0,0);
-  const nextBtn = document.getElementById('proxy-next-btn');
-  if (nextBtn) nextBtn.style.opacity = proxyDate >= today ? '0.3' : '1';
+  const proxyDaily = proxyEmployee && proxyEmployee.rate_type === 'daily';
 
   document.getElementById('proxy-title').textContent = proxyEmployee ? proxyEmployee.display_name : 'Log Time';
-  document.getElementById('proxy-sub').textContent = formatDate(proxyDate);
+  document.getElementById('proxy-sub').textContent = formatWeekRange(monday);
 
   // Check lock status
   const { data: ts } = await sb.from('timesheets')
@@ -2616,183 +2554,203 @@ async function loadProxyDay() {
 
   const status = ts ? ts.status : 'Draft';
   const locked = status === 'Submitted' || status === 'Approved';
-  document.getElementById('proxy-form').style.display = locked ? 'none' : '';
 
-  // Show submit button for Draft/Rejected weeks
-  const submitSection = document.getElementById('proxy-submit-section');
-  submitSection.style.display = (status === 'Draft' || status === 'Rejected') ? '' : 'none';
-
-  // Load entries for this day
+  // Load existing entries for this week
   const { data: entries } = await sb.from('time_entries')
     .select('*')
     .eq('employee_id', proxyEmployeeId)
-    .eq('entry_date', isoDate(proxyDate))
+    .gte('entry_date', isoDate(monday))
+    .lte('entry_date', isoDate(friday))
+    .order('entry_date')
     .order('start_time');
 
-  const dayEntries = entries || [];
-  const container = document.getElementById('proxy-entries');
-  const proxyDaily = proxyEmployee && proxyEmployee.rate_type === 'daily';
+  const weekEntries = entries || [];
+  const existingDates = {};
+  weekEntries.forEach(e => { existingDates[e.entry_date] = true; });
 
-  if (dayEntries.length === 0) {
-    container.innerHTML = '<div class="empty"><div class="empty-icon">&#128203;</div><p>No entries for this day</p></div>';
-    document.getElementById('proxy-total-bar').style.display = 'none';
-  } else {
-    let html = '';
-    let totalHours = 0;
-    dayEntries.forEach(e => {
-      const hours = parseFloat(e.calculated_hours || 0);
-      totalHours += hours;
-      const type = e.entry_type || 'work';
-      const badge = entryTypeBadge(type);
-      let timesText;
-      if (isLeaveType(type)) {
-        timesText = entryTypeLabel(type) + (e.notes ? ' · ' + esc(e.notes) : '');
-      } else if (proxyDaily) {
-        timesText = (type === 'half_day_work' ? 'Half Day' : 'Present') + (e.notes ? ' · ' + esc(e.notes) : '');
-      } else {
-        timesText = e.start_time.slice(0,5) + ' – ' + e.end_time.slice(0,5) + ' (' + e.break_minutes + 'min break)' + (e.notes ? ' · ' + esc(e.notes) : '');
+  // Populate bulk project select
+  const projSel = document.getElementById('proxy-bulk-project');
+  projSel.innerHTML = '<option value="">Select project...</option>';
+  projects.forEach(p => {
+    projSel.innerHTML += `<option value="${esc(p.name)}">${esc(p.name)}</option>`;
+  });
+
+  // Show/hide bulk form
+  document.getElementById('proxy-bulk-form').style.display = locked ? 'none' : '';
+  document.getElementById('proxy-bulk-time-defaults').style.display = proxyDaily ? 'none' : '';
+
+  // Reset default times
+  document.getElementById('proxy-def-start').value = '08:00';
+  document.getElementById('proxy-def-end').value = '16:30';
+  document.getElementById('proxy-def-break').value = '30';
+
+  // Render 5 day checkboxes
+  const dates = getWeekDates(monday);
+  const daysContainer = document.getElementById('proxy-bulk-days');
+  let daysHtml = '';
+  dates.forEach((d, i) => {
+    const iso = isoDate(d);
+    const hasEntry = existingDates[iso];
+    const isFuture = d > today;
+    const disabled = hasEntry || isFuture || locked;
+    const label = hasEntry ? 'Already logged' : (isFuture ? 'Future' : (locked ? status : ''));
+    const checked = (!disabled) ? 'checked' : '';
+    const dimStyle = disabled ? 'opacity:0.5' : '';
+
+    daysHtml += `<div class="card" style="margin-bottom:6px;padding:10px 14px;${dimStyle}">
+      <div style="display:flex;align-items:center;gap:10px">
+        <input type="checkbox" id="proxy-chk-${i}" ${checked} ${disabled ? 'disabled' : ''} style="width:20px;height:20px;accent-color:var(--green)" />
+        <div style="flex:1">
+          <span style="font-weight:600;font-size:14px">${DAY_NAMES[i]}</span>
+          <span style="font-size:12px;color:var(--muted);margin-left:4px">${formatDateShort(d)}</span>
+        </div>
+        ${label ? `<span style="font-size:12px;color:var(--muted);font-style:italic">${label}</span>` : ''}
+        ${!disabled ? `<select id="proxy-dtype-${i}" style="font-size:12px;padding:4px 6px;border:1px solid var(--border);border-radius:4px">
+          <option value="work">Work</option>
+          <option value="half_day_work">Half Day Work</option>
+          <option value="holiday">Holiday</option>
+          <option value="half_day_holiday">Half Day Holiday</option>
+          <option value="sick">Sick</option>
+          <option value="absent">Absent</option>
+        </select>` : ''}
+      </div>
+    </div>`;
+  });
+  daysContainer.innerHTML = daysHtml;
+
+  // Show save button only if there are days to log
+  const hasAvailable = dates.some((d, i) => !existingDates[isoDate(d)] && d <= today && !locked);
+  document.getElementById('proxy-bulk-save').style.display = hasAvailable ? '' : 'none';
+
+  // Show existing entries summary
+  const entriesContainer = document.getElementById('proxy-week-entries');
+  if (weekEntries.length > 0) {
+    let html = '<div class="card"><div class="card-title">Existing Entries</div>';
+    dates.forEach((d, i) => {
+      const dayEntries = weekEntries.filter(e => e.entry_date === isoDate(d));
+      if (dayEntries.length > 0) {
+        dayEntries.forEach(e => {
+          const type = e.entry_type || 'work';
+          const badge = entryTypeBadge(type);
+          let detail;
+          if (isLeaveType(type)) {
+            detail = entryTypeLabel(type);
+          } else if (proxyDaily) {
+            detail = (e.project_name ? esc(e.project_name) : '') + (type === 'half_day_work' ? ' (Half Day)' : '');
+          } else {
+            detail = (e.project_name ? esc(e.project_name) + ' ' : '') + e.start_time.slice(0,5) + '–' + e.end_time.slice(0,5);
+          }
+          html += `<div class="entry-row" style="margin-bottom:4px">
+            <div class="entry-info">
+              <div class="entry-project"><strong>${DAY_NAMES[i]}</strong> ${formatDateShort(d)} — ${e.project_name ? esc(e.project_name) : badge}</div>
+              <div class="entry-times">${detail}${e.notes ? ' · ' + esc(e.notes) : ''}</div>
+            </div>
+            ${locked ? '' : `<button class="entry-del" onclick="deleteProxyEntry('${e.id}')" title="Delete">×</button>`}
+          </div>`;
+        });
       }
-      const hoursDisplay = isLeaveType(type) ? entryTypeLabel(type) : (proxyDaily ? (type === 'half_day_work' ? '½ day' : '1 day') : hours.toFixed(1) + 'h');
-      html += `
-        <div class="entry-row">
-          <div class="entry-info">
-            <div class="entry-project">${e.project_name ? esc(e.project_name) : badge}</div>
-            <div class="entry-times">${timesText}</div>
-          </div>
-          <div class="entry-hours">${hoursDisplay}</div>
-          ${locked ? '' : `<button class="entry-del" onclick="deleteProxyEntry('${e.id}')" title="Delete">×</button>`}
-        </div>`;
     });
-    container.innerHTML = html;
-    document.getElementById('proxy-total-bar').style.display = proxyDaily ? 'none' : '';
-    document.getElementById('proxy-day-total').textContent = totalHours.toFixed(1) + ' hrs';
+    html += '</div>';
+    entriesContainer.innerHTML = html;
+  } else {
+    entriesContainer.innerHTML = '';
   }
 
-  // Hide time fields for daily rate employees
-  document.getElementById('proxy-time-fields').style.display = proxyDaily ? 'none' : '';
-
-  // Reset form
-  document.getElementById('proxy-type').value = 'work';
-  onProxyTypeChange();
-  document.getElementById('proxy-project').value = '';
-  document.getElementById('proxy-start').value = '08:00';
-  document.getElementById('proxy-end').value = '16:30';
-  document.getElementById('proxy-break').value = '30';
-  document.getElementById('proxy-notes').value = '';
+  // Submit button
+  const submitSection = document.getElementById('proxy-submit-section');
+  if ((status === 'Draft' || status === 'Rejected') && weekEntries.length > 0) {
+    submitSection.style.display = '';
+  } else {
+    submitSection.style.display = 'none';
+  }
 }
 
-function onProxyTypeChange() {
-  const type = document.getElementById('proxy-type').value;
-  document.getElementById('proxy-work-fields').style.display = isLeaveType(type) ? 'none' : '';
-}
-
-async function saveProxyEntry() {
+async function saveProxyBulk() {
   if (!proxyEmployeeId) return toast('Select an employee first');
 
-  const entryType = document.getElementById('proxy-type').value;
-  const notes = document.getElementById('proxy-notes').value.trim();
+  const project = document.getElementById('proxy-bulk-project').value;
   const proxyDaily = proxyEmployee && proxyEmployee.rate_type === 'daily';
-  let project, start, end, brk;
+  const monday = getProxyMonday();
+  const dates = getWeekDates(monday);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const rows = [];
 
-  if (isLeaveType(entryType)) {
-    project = null;
-    start = '08:00'; end = '16:30'; brk = 30;
+  for (let i = 0; i < 5; i++) {
+    const chk = document.getElementById('proxy-chk-' + i);
+    if (!chk || !chk.checked) continue;
 
-    const { data: existing } = await sb.from('time_entries')
-      .select('id, entry_type')
-      .eq('employee_id', proxyEmployeeId)
-      .eq('entry_date', isoDate(proxyDate));
-    if (existing && existing.length > 0) {
-      if (entryType === 'half_day_holiday') {
-        const hasHalfWork = existing.some(e => e.entry_type === 'half_day_work');
-        const hasLeave = existing.some(e => isLeaveType(e.entry_type));
-        if (hasLeave) return toast('Leave already logged for this day');
-        if (!hasHalfWork && existing.length > 0) return toast('Day already has entries');
-      } else {
-        return toast('Already logged for this day');
-      }
-    }
-  } else {
-    project = document.getElementById('proxy-project').value;
-    if (!project) return toast('Select a project');
+    const entryType = document.getElementById('proxy-dtype-' + i)?.value || 'work';
+    let start, end, brk;
 
-    if (proxyDaily) {
-      const { data: existing } = await sb.from('time_entries')
-        .select('id, entry_type')
-        .eq('employee_id', proxyEmployeeId)
-        .eq('entry_date', isoDate(proxyDate));
-      if (existing && existing.length > 0) {
-        if (entryType === 'half_day_work') {
-          const hasHalfHol = existing.some(e => e.entry_type === 'half_day_holiday');
-          const hasWork = existing.some(e => WORK_TYPES.includes(e.entry_type));
-          if (hasWork) return toast('Work already logged for this day');
-          if (!hasHalfHol && existing.length > 0) return toast('Day already has entries');
-        } else {
-          return toast('Already logged for this day');
-        }
-      }
+    if (isLeaveType(entryType)) {
+      start = '08:00'; end = '16:30'; brk = 30;
+    } else if (!project) {
+      return toast('Select a project for work days');
+    } else if (proxyDaily || entryType === 'half_day_work') {
       start = entryType === 'half_day_work' ? '08:00' : '08:00';
       end   = entryType === 'half_day_work' ? '12:30' : '16:30';
       brk   = entryType === 'half_day_work' ? 0 : 30;
     } else {
-      start = document.getElementById('proxy-start').value;
-      end   = document.getElementById('proxy-end').value;
-      brk   = parseInt(document.getElementById('proxy-break').value) || 0;
-      if (!start || !end) return toast('Enter start and end times');
+      start = document.getElementById('proxy-def-start').value;
+      end   = document.getElementById('proxy-def-end').value;
+      brk   = parseInt(document.getElementById('proxy-def-break').value) || 0;
+      if (!start || !end) return toast('Enter default start and end times');
       if (end <= start) return toast('End time must be after start time');
-      if (brk < 0) return toast('Break cannot be negative');
-
-      const [sh, sm] = start.split(':').map(Number);
-      const [eh, em] = end.split(':').map(Number);
-      const spanMins = (eh * 60 + em) - (sh * 60 + sm);
-      if (spanMins > 360 && brk < 30) return toast('Minimum 30-minute break required for shifts over 6 hours');
-
-      const hours = calcHours(start, end, brk);
-      if (hours <= 0) return toast('No working hours — check break time');
-
-      // Overlap check
-      const { data: dayEntries } = await sb.from('time_entries')
-        .select('start_time, end_time')
-        .eq('employee_id', proxyEmployeeId)
-        .eq('entry_date', isoDate(proxyDate))
-        .in('entry_type', ['work', 'half_day_work']);
-      if (dayEntries && dayEntries.length > 0) {
-        const overlap = dayEntries.find(e => start < e.end_time && end > e.start_time);
-        if (overlap) return toast('Overlaps with existing entry (' + overlap.start_time.slice(0,5) + '–' + overlap.end_time.slice(0,5) + ')');
-      }
     }
+
+    rows.push({
+      employee_id: proxyEmployeeId,
+      project_name: isLeaveType(entryType) ? null : project,
+      entry_date: isoDate(dates[i]),
+      start_time: start,
+      end_time: end,
+      break_minutes: brk,
+      entry_type: entryType
+    });
   }
 
-  const { error } = await sb.from('time_entries').insert({
-    employee_id: proxyEmployeeId,
-    project_name: project,
-    entry_date: isoDate(proxyDate),
-    start_time: start,
-    end_time: end,
-    break_minutes: brk,
-    entry_type: entryType,
-    notes: notes || null
-  });
+  if (rows.length === 0) return toast('No days selected');
 
-  if (error) return toast('Error: ' + error.message, 4000);
+  // Check lock
+  const { data: tsCheck } = await sb.from('timesheets')
+    .select('status')
+    .eq('employee_id', proxyEmployeeId)
+    .eq('week_starting', isoDate(monday))
+    .single();
+  if (tsCheck && (tsCheck.status === 'Submitted' || tsCheck.status === 'Approved')) {
+    return toast('This week is already ' + tsCheck.status.toLowerCase());
+  }
+
+  // Filter out duplicates
+  const friday = new Date(monday); friday.setDate(friday.getDate() + 4);
+  const { data: existing } = await sb.from('time_entries')
+    .select('entry_date')
+    .eq('employee_id', proxyEmployeeId)
+    .gte('entry_date', isoDate(monday))
+    .lte('entry_date', isoDate(friday));
+  const existingDates = new Set((existing || []).map(e => e.entry_date));
+  const filtered = rows.filter(r => !existingDates.has(r.entry_date));
+  if (filtered.length === 0) return toast('All selected days already have entries');
+
+  const { error } = await sb.from('time_entries').insert(filtered);
+  if (error) return toast('Error: ' + (error.message || 'Could not save'), 4000);
 
   // Reset Rejected timesheet to Draft
-  const monday = getMonday(proxyDate);
   await sb.from('timesheets')
     .update({ status: 'Draft', submitted_at: null, rejection_reason: null })
     .eq('employee_id', proxyEmployeeId)
     .eq('week_starting', isoDate(monday))
     .eq('status', 'Rejected');
 
-  toast('Entry saved for ' + (proxyEmployee ? proxyEmployee.display_name : 'employee'));
-  await loadProxyDay();
+  toast('Saved ' + filtered.length + (filtered.length === 1 ? ' entry' : ' entries') + ' for ' + proxyEmployee.display_name);
+  await loadProxyWeek();
 }
 
 async function deleteProxyEntry(id) {
   const { error } = await sb.from('time_entries').delete().eq('id', id);
   if (error) return toast('Error: ' + error.message, 4000);
   toast('Entry deleted');
-  await loadProxyDay();
+  await loadProxyWeek();
 }
 
 async function submitProxyTimesheet() {
@@ -2837,7 +2795,6 @@ async function submitProxyTimesheet() {
     totalCost = rate / 52;
   }
 
-  // Expense total for this employee's week
   const { data: expData } = await sb.from('expenses')
     .select('amount')
     .eq('employee_id', proxyEmployeeId)
@@ -2856,7 +2813,7 @@ async function submitProxyTimesheet() {
 
   if (error) return toast('Error: ' + error.message, 4000);
   toast('Timesheet submitted for ' + proxyEmployee.display_name);
-  await loadProxyDay();
+  await loadProxyWeek();
 }
 
 // ── BOOT ─────────────────────────────────────────────────────
