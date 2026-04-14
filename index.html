@@ -540,10 +540,12 @@
   <div id="scr-expenses" class="screen">
     <div class="hdr">
       <button class="hdr-back" onclick="showScreen('scr-dash')">&#8592;</button>
+      <button class="hdr-back" onclick="prevExpenseWeek()" style="font-size:16px">&#9664;</button>
       <div style="flex:1">
         <div class="hdr-title">Expenses</div>
         <div class="hdr-sub" id="exp-week-label"></div>
       </div>
+      <button class="hdr-back" onclick="nextExpenseWeek()" style="font-size:16px" id="exp-next-btn">&#9654;</button>
     </div>
     <div class="body">
       <div id="exp-list"></div>
@@ -1663,8 +1665,18 @@ async function saveBulkEntries() {
 
   if (rows.length === 0) return toast('No days selected');
 
-  // Safety check: re-verify no duplicates server-side
+  // Block if timesheet already submitted/approved
   const monday = currentWeekStart;
+  const { data: tsCheck } = await sb.from('timesheets')
+    .select('status')
+    .eq('employee_id', WMEAuth.getEmployeeId())
+    .eq('week_starting', isoDate(monday))
+    .single();
+  if (tsCheck && (tsCheck.status === 'Submitted' || tsCheck.status === 'Approved')) {
+    return toast('This week is already ' + tsCheck.status.toLowerCase() + ' — cannot add entries');
+  }
+
+  // Safety check: re-verify no duplicates server-side
   const friday = new Date(monday); friday.setDate(friday.getDate() + 4);
   const { data: existing } = await sb.from('time_entries')
     .select('entry_date')
@@ -1794,12 +1806,14 @@ async function loadWeekView() {
     ? uniqueDays + (uniqueDays === 1 ? ' day' : ' days')
     : totalHours.toFixed(1) + ' hrs';
 
-  // Submit button
+  // Submit button — works for current and past weeks
   const submitBtn = document.getElementById('week-submit-btn');
   if ((status === 'Draft' || status === 'Rejected') && weekEntries.length > 0) {
     submitBtn.style.display = '';
     submitBtn.disabled = false;
-    submitBtn.textContent = status === 'Rejected' ? 'Resubmit Timesheet' : 'Submit Timesheet';
+    const isPast = isoDate(monday) !== isoDate(getMonday(new Date()));
+    submitBtn.textContent = status === 'Rejected' ? 'Resubmit Timesheet' : (isPast ? 'Submit Past Week' : 'Submit Timesheet');
+    submitBtn.onclick = () => submitTimesheet(monday);
   } else {
     submitBtn.style.display = 'none';
   }
@@ -1830,12 +1844,30 @@ function populateExpenseProjectSelect() {
   });
 }
 
+let expenseWeekStart = getMonday(new Date());
+
+function prevExpenseWeek() {
+  expenseWeekStart = new Date(expenseWeekStart);
+  expenseWeekStart.setDate(expenseWeekStart.getDate() - 7);
+  loadExpenses();
+}
+
+function nextExpenseWeek() {
+  const next = new Date(expenseWeekStart);
+  next.setDate(next.getDate() + 7);
+  if (next > getMonday(new Date())) return;
+  expenseWeekStart = next;
+  loadExpenses();
+}
+
 async function loadExpenses() {
-  const monday = getMonday(new Date());
+  const monday = expenseWeekStart;
   const friday = new Date(monday);
   friday.setDate(friday.getDate() + 4);
 
   document.getElementById('exp-week-label').textContent = formatWeekRange(monday);
+  const expNextBtn = document.getElementById('exp-next-btn');
+  if (expNextBtn) expNextBtn.style.opacity = isoDate(monday) === isoDate(getMonday(new Date())) ? '0.3' : '1';
   populateExpenseProjectSelect();
 
   // Check if timesheet is locked
@@ -1889,7 +1921,9 @@ async function loadExpenses() {
   }
 
   // Reset form
-  document.getElementById('exp-date').value = isoDate(new Date());
+  // Default date: today if current week, otherwise Monday of selected week
+  const isCurrentWeek = isoDate(monday) === isoDate(getMonday(new Date()));
+  document.getElementById('exp-date').value = isCurrentWeek ? isoDate(new Date()) : isoDate(monday);
   document.getElementById('exp-category').value = '';
   document.getElementById('exp-project').value = '';
   document.getElementById('exp-amount').value = '';
@@ -1898,7 +1932,7 @@ async function loadExpenses() {
 }
 
 async function saveExpense() {
-  const monday = getMonday(new Date());
+  const monday = expenseWeekStart;
   const friday = new Date(monday);
   friday.setDate(friday.getDate() + 4);
 
@@ -1915,7 +1949,7 @@ async function saveExpense() {
   if (!project) return toast('Select a project');
   if (!amount || amount <= 0) return toast('Enter a valid amount');
 
-  // Validate date is within current week
+  // Validate date is within selected week
   const d = new Date(expDate + 'T00:00:00');
   if (d < monday || d > friday) return toast('Date must be within the current week (' + formatWeekRange(monday) + ')');
 
@@ -1975,8 +2009,8 @@ async function getWeekExpenseTotal(monday) {
 }
 
 // ── SUBMIT TIMESHEET ─────────────────────────────────────────
-async function submitTimesheet() {
-  const monday = getMonday(new Date());
+async function submitTimesheet(weekMonday) {
+  const monday = weekMonday || getMonday(new Date());
   const friday = new Date(monday);
   friday.setDate(friday.getDate() + 4);
 
