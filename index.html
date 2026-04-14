@@ -375,6 +375,7 @@
             <option value="half_day_work">Half Day Work</option>
             <option value="holiday">Holiday</option>
             <option value="half_day_holiday">Half Day Holiday</option>
+            <option value="bank_holiday">Bank Holiday</option>
             <option value="sick">Sick</option>
             <option value="absent">Absent</option>
           </select>
@@ -1009,7 +1010,7 @@ function getMonday(d) {
 
 function getWeekDates(monday) {
   const dates = [];
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 7; i++) {
     const d = new Date(monday);
     d.setDate(d.getDate() + i);
     dates.push(d);
@@ -1030,12 +1031,12 @@ function formatDateShort(d) {
 }
 
 function formatWeekRange(monday) {
-  const fri = new Date(monday);
-  fri.setDate(fri.getDate() + 4);
-  return formatDateShort(monday) + ' \u2013 ' + formatDateShort(fri);
+  const sun = new Date(monday);
+  sun.setDate(sun.getDate() + 6);
+  return formatDateShort(monday) + ' \u2013 ' + formatDateShort(sun);
 }
 
-const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 // ── TIME CALCULATION ─────────────────────────────────────────
 function calcHours(startStr, endStr, breakMins) {
@@ -1076,7 +1077,7 @@ function updateEntryCalc() {
 }
 
 // ── ENTRY TYPE HELPERS ───────────────────────────────────────
-const LEAVE_TYPES = ['holiday', 'half_day_holiday', 'sick', 'absent'];
+const LEAVE_TYPES = ['holiday', 'half_day_holiday', 'bank_holiday', 'sick', 'absent'];
 const WORK_TYPES = ['work', 'half_day_work'];
 
 function isLeaveType(t) { return LEAVE_TYPES.includes(t); }
@@ -1085,6 +1086,7 @@ function entryTypeBadge(t) {
   switch(t) {
     case 'holiday':          return '<span class="badge badge-holiday">Holiday</span>';
     case 'half_day_holiday':  return '<span class="badge badge-holiday">Half Day Holiday</span>';
+    case 'bank_holiday':      return '<span class="badge badge-holiday">Bank Holiday</span>';
     case 'half_day_work':     return '<span class="badge badge-halfday">Half Day</span>';
     case 'sick':              return '<span class="badge badge-sick">Sick</span>';
     case 'absent':            return '<span class="badge badge-absent">Absent</span>';
@@ -1098,6 +1100,7 @@ function entryTypeLabel(t) {
     case 'half_day_work': return 'Half Day Work';
     case 'holiday': return 'Holiday';
     case 'half_day_holiday': return 'Half Day Holiday';
+    case 'bank_holiday': return 'Bank Holiday';
     case 'sick': return 'Sick';
     case 'absent': return 'Absent';
     default: return t;
@@ -1155,7 +1158,7 @@ async function loadDashboard() {
   const monday = getMonday(new Date());
   currentWeekStart = monday;
   const friday = new Date(monday);
-  friday.setDate(friday.getDate() + 4);
+  friday.setDate(friday.getDate() + 6);
 
   // Load entries for this week
   const { data: entries } = await sb.from('time_entries')
@@ -1524,7 +1527,7 @@ let bulkExisting = {}; // { 'YYYY-MM-DD': true }
 
 async function openBulkEntry() {
   const monday = currentWeekStart;
-  const friday = new Date(monday); friday.setDate(friday.getDate() + 4);
+  const friday = new Date(monday); friday.setDate(friday.getDate() + 6);
   const today = new Date(); today.setHours(0,0,0,0);
   const daily = isDailyRate();
 
@@ -1583,6 +1586,7 @@ async function openBulkEntry() {
           <option value="half_day_work">Half Day Work</option>
           <option value="holiday">Holiday</option>
           <option value="half_day_holiday">Half Day Holiday</option>
+          <option value="bank_holiday">Bank Holiday</option>
           <option value="sick">Sick</option>
           <option value="absent">Absent</option>
         </select>
@@ -1628,7 +1632,7 @@ function updateBulkDefaults() {
   const start = document.getElementById('bulk-def-start').value;
   const end   = document.getElementById('bulk-def-end').value;
   const brk   = document.getElementById('bulk-def-break').value;
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 7; i++) {
     const chk = document.getElementById('bulk-chk-' + i);
     if (!chk || chk.disabled) continue;
     const type = document.getElementById('bulk-type-' + i)?.value || 'work';
@@ -1658,7 +1662,7 @@ function updateBulkRow(i) {
 function updateBulkTotal() {
   const daily = isDailyRate();
   let total = 0;
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 7; i++) {
     const chk = document.getElementById('bulk-chk-' + i);
     if (!chk || !chk.checked) continue;
     if (daily) {
@@ -1681,7 +1685,7 @@ async function saveBulkEntries() {
   const rows = [];
   let holidayDaysNeeded = 0;
 
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 7; i++) {
     const chk = document.getElementById('bulk-chk-' + i);
     if (!chk || !chk.checked) continue;
 
@@ -1747,7 +1751,7 @@ async function saveBulkEntries() {
   }
 
   // Safety check: re-verify no duplicates server-side
-  const friday = new Date(monday); friday.setDate(friday.getDate() + 4);
+  const friday = new Date(monday); friday.setDate(friday.getDate() + 6);
   const { data: existing } = await sb.from('time_entries')
     .select('entry_date')
     .eq('employee_id', WMEAuth.getEmployeeId())
@@ -1786,7 +1790,7 @@ function nextWeek() {
 async function loadWeekView() {
   const monday = currentWeekStart;
   const friday = new Date(monday);
-  friday.setDate(friday.getDate() + 4);
+  friday.setDate(friday.getDate() + 6);
 
   document.getElementById('week-title').textContent = formatWeekRange(monday);
 
@@ -1933,7 +1937,7 @@ function nextExpenseWeek() {
 async function loadExpenses() {
   const monday = expenseWeekStart;
   const friday = new Date(monday);
-  friday.setDate(friday.getDate() + 4);
+  friday.setDate(friday.getDate() + 6);
 
   document.getElementById('exp-week-label').textContent = formatWeekRange(monday);
   const expNextBtn = document.getElementById('exp-next-btn');
@@ -2004,7 +2008,7 @@ async function loadExpenses() {
 async function saveExpense() {
   const monday = expenseWeekStart;
   const friday = new Date(monday);
-  friday.setDate(friday.getDate() + 4);
+  friday.setDate(friday.getDate() + 6);
 
   const expDate = document.getElementById('exp-date').value;
   const category = document.getElementById('exp-category').value;
@@ -2070,7 +2074,7 @@ async function deleteExpense(id) {
 
 async function getWeekExpenseTotal(monday) {
   const friday = new Date(monday);
-  friday.setDate(friday.getDate() + 4);
+  friday.setDate(friday.getDate() + 6);
   const { data } = await sb.from('expenses')
     .select('amount')
     .eq('employee_id', WMEAuth.getEmployeeId())
@@ -2082,7 +2086,7 @@ async function getWeekExpenseTotal(monday) {
 async function submitTimesheet(weekMonday) {
   const monday = weekMonday || getMonday(new Date());
   const friday = new Date(monday);
-  friday.setDate(friday.getDate() + 4);
+  friday.setDate(friday.getDate() + 6);
 
   // Calculate totals
   const { data: entries } = await sb.from('time_entries')
@@ -2206,7 +2210,7 @@ async function loadApprovals() {
 
     // Load entries for this timesheet
     const friday = new Date(monday);
-    friday.setDate(friday.getDate() + 4);
+    friday.setDate(friday.getDate() + 6);
     const { data: entries } = await sb.from('time_entries')
       .select('*')
       .eq('employee_id', ts.employee_id)
@@ -2538,7 +2542,7 @@ async function loadProxyWeek() {
   if (!proxyEmployeeId) return;
 
   const monday = getProxyMonday();
-  const friday = new Date(monday); friday.setDate(friday.getDate() + 4);
+  const friday = new Date(monday); friday.setDate(friday.getDate() + 6);
   const today = new Date(); today.setHours(0,0,0,0);
   const proxyDaily = proxyEmployee && proxyEmployee.rate_type === 'daily';
 
@@ -2610,6 +2614,7 @@ async function loadProxyWeek() {
           <option value="half_day_work">Half Day Work</option>
           <option value="holiday">Holiday</option>
           <option value="half_day_holiday">Half Day Holiday</option>
+          <option value="bank_holiday">Bank Holiday</option>
           <option value="sick">Sick</option>
           <option value="absent">Absent</option>
         </select>` : ''}
@@ -2675,7 +2680,7 @@ async function saveProxyBulk() {
   const today = new Date(); today.setHours(0,0,0,0);
   const rows = [];
 
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 7; i++) {
     const chk = document.getElementById('proxy-chk-' + i);
     if (!chk || !chk.checked) continue;
 
@@ -2722,7 +2727,7 @@ async function saveProxyBulk() {
   }
 
   // Filter out duplicates
-  const friday = new Date(monday); friday.setDate(friday.getDate() + 4);
+  const friday = new Date(monday); friday.setDate(friday.getDate() + 6);
   const { data: existing } = await sb.from('time_entries')
     .select('entry_date')
     .eq('employee_id', proxyEmployeeId)
@@ -2758,7 +2763,7 @@ async function submitProxyTimesheet() {
 
   const monday = getProxyMonday();
   const friday = new Date(monday);
-  friday.setDate(friday.getDate() + 4);
+  friday.setDate(friday.getDate() + 6);
 
   const { data: entries } = await sb.from('time_entries')
     .select('calculated_hours, entry_date, entry_type')
