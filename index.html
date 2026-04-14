@@ -2519,14 +2519,14 @@ async function openProxyEntry() {
   showScreen('scr-proxy');
 }
 
-function onProxyEmployeeChange() {
+async function onProxyEmployeeChange() {
   const id = document.getElementById('proxy-employee').value;
   if (!id) { proxyEmployeeId = null; proxyEmployee = null; return; }
   proxyEmployeeId = id;
-  sb.from('employees').select('*').eq('id', id).single().then(({ data }) => {
-    proxyEmployee = data;
-    loadProxyWeek();
-  });
+  const { data, error } = await sb.from('employees').select('*').eq('id', id).single();
+  if (error || !data) { toast('Could not load employee'); return; }
+  proxyEmployee = data;
+  await loadProxyWeek();
 }
 
 function getProxyMonday() {
@@ -2550,7 +2550,7 @@ async function loadProxyWeek() {
     .select('status')
     .eq('employee_id', proxyEmployeeId)
     .eq('week_starting', isoDate(monday))
-    .single();
+    .maybeSingle();
 
   const status = ts ? ts.status : 'Draft';
   const locked = status === 'Submitted' || status === 'Approved';
