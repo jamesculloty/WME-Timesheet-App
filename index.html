@@ -1419,6 +1419,7 @@ async function loadUnsubmittedForManagers() {
       <div class="unsub-row-name">${esc(r.name)}</div>
       <div class="unsub-row-week">w/c ${formatDateShort(r.monday)}</div>
       <div class="unsub-row-hours">${r.hours.toFixed(1)} hrs</div>
+      <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();submitTimesheetFor('${r.employeeId}','${r.weekKey}')" style="background:#E65100;padding:6px 12px;font-size:12px;min-width:60px">Submit</button>
     </div>`
   ).join('');
 
@@ -1426,6 +1427,77 @@ async function loadUnsubmittedForManagers() {
     <div class="unsub-section-hdr">Unsubmitted Time (${unsub.length} entries from ${new Set(unsub.map(r => r.name)).size} employees)</div>
     <div class="unsub-section-body">${rows}</div>
   </div>`;
+}
+
+// ── MANAGER SUBMIT ON BEHALF ────────────────────────────────
+async function submitTimesheetFor(employeeId, weekKey) {
+  const monday = new Date(weekKey + 'T00:00:00');
+  const friday = new Date(monday);
+  friday.setDate(friday.getDate() + 6);
+
+  // Fetch employee record for rate calculations
+  const { data: emp } = await sb.from('employees').select('*').eq('id', employeeId).single();
+  if (!emp) return toast('Employee not found');
+
+  // Fetch time entries for this employee and week
+  const { data: entries } = await sb.from('time_entries')
+    .select('calculated_hours, entry_date, entry_type')
+    .eq('employee_id', employeeId)
+    .gte('entry_date', isoDate(monday))
+    .lte('entry_date', isoDate(friday));
+
+  const weekEntries = entries || [];
+  if (weekEntries.length === 0) return toast('No entries to submit');
+
+  const totalHours = weekEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
+
+  // Calculate cost using same logic as submitTimesheet
+  const rate = parseFloat(emp.rate);
+  let totalCost = 0;
+  if (emp.rate_type === 'hourly') {
+    weekEntries.forEach(e => {
+      const type = e.entry_type || 'work';
+      const hrs = parseFloat(e.calculated_hours || 0);
+      if (type === 'work' || type === 'half_day_work') totalCost += hrs * rate;
+      else if (type === 'holiday' || type === 'half_day_holiday') totalCost += hrs * rate;
+      else if (type === 'sick') totalCost += emp.sick_pay === 'paid' ? hrs * rate : 0;
+      else if (type === 'absent') totalCost += emp.absent_pay === 'paid' ? hrs * rate : 0;
+    });
+  } else if (emp.rate_type === 'daily') {
+    weekEntries.forEach(e => {
+      const type = e.entry_type || 'work';
+      const dayVal = (type === 'half_day_work' || type === 'half_day_holiday') ? rate * 0.5 : rate;
+      if (type === 'work' || type === 'half_day_work') totalCost += dayVal;
+      else if (type === 'holiday' || type === 'half_day_holiday') totalCost += dayVal;
+      else if (type === 'sick') totalCost += emp.sick_pay === 'paid' ? dayVal : 0;
+      else if (type === 'absent') totalCost += emp.absent_pay === 'paid' ? dayVal : 0;
+    });
+  } else if (emp.rate_type === 'salary') {
+    totalCost = rate / 52;
+  }
+
+  // Expense total for this employee's week
+  const { data: expData } = await sb.from('expenses')
+    .select('amount')
+    .eq('employee_id', employeeId)
+    .eq('week_starting', weekKey);
+  const totalExpenses = (expData || []).reduce((sum, e) => sum + parseFloat(e.amount), 0);
+
+  // Upsert timesheet
+  const { error } = await sb.from('timesheets').upsert({
+    employee_id: employeeId,
+    week_starting: weekKey,
+    status: 'Submitted',
+    total_hours: totalHours,
+    total_cost: Math.round(totalCost * 100) / 100,
+    total_expenses: Math.round(totalExpenses * 100) / 100,
+    submitted_at: new Date().toISOString()
+  }, { onConflict: 'employee_id,week_starting' });
+
+  if (error) return toast('Error: ' + error.message, 4000);
+
+  toast(emp.display_name + ' — timesheet submitted', 3000);
+  loadApprovals();
 }
 
 // ── LOG DAY ──────────────────────────────────────────────────
