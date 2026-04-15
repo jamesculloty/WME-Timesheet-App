@@ -196,6 +196,21 @@
     .emp-detail { font-size: 12px; color: var(--muted); margin-top: 2px; }
     .emp-rate { font-size: 14px; font-weight: 600; color: var(--green); min-width: 60px; text-align: right; }
 
+    /* ── Unsubmitted banners ── */
+    .unsub-banner { background: #FFF3E0; border: 1.5px solid #E65100; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .unsub-banner-text { flex: 1; }
+    .unsub-banner-title { font-weight: 600; color: #E65100; font-size: 13px; }
+    .unsub-banner-detail { font-size: 12px; color: #BF360C; margin-top: 2px; }
+    .unsub-section { background: var(--white); border: 1.5px solid #E65100; border-radius: 10px; margin-bottom: 16px; overflow: hidden; }
+    .unsub-section-hdr { padding: 12px 16px; background: #FFF3E0; font-weight: 600; font-size: 14px; color: #E65100; cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
+    .unsub-section-hdr::after { content: '▾'; font-size: 12px; }
+    .unsub-section.collapsed .unsub-section-body { display: none; }
+    .unsub-section.collapsed .unsub-section-hdr::after { content: '▸'; }
+    .unsub-row { padding: 10px 16px; border-top: 1px solid #FFE0B2; display: flex; align-items: center; gap: 12px; font-size: 13px; }
+    .unsub-row-name { font-weight: 600; flex: 1; }
+    .unsub-row-week { color: var(--muted); min-width: 90px; }
+    .unsub-row-hours { font-weight: 600; color: #E65100; min-width: 50px; text-align: right; }
+
     /* ── Nav ── */
     .nav { display: flex; border-top: 1px solid var(--border); background: var(--white); position: sticky; bottom: 0; z-index: 10; }
     .nav-tab { flex: 1; padding: 10px 4px 12px; border: none; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10px; color: var(--muted); font-weight: 500; }
@@ -299,6 +314,8 @@
         <div class="stat"><div class="stat-n" id="stat-pending">0</div><div class="stat-l" id="stat-pending-label">Pending approval</div></div>
         <div class="stat"><div class="stat-n" id="stat-week">—</div><div class="stat-l">Current week</div></div>
       </div>
+
+      <div id="unsub-banners"></div>
 
       <div id="submit-reminder" style="display:none;background:#FDF6E3;border:1.5px solid #B8860B;border-radius:10px;padding:14px 16px;margin-bottom:14px">
         <div style="font-weight:600;color:#7A5000;margin-bottom:4px">Timesheet not submitted</div>
@@ -617,6 +634,7 @@
       <div class="hdr-title">Approve Timesheets</div>
     </div>
     <div class="body">
+      <div id="unsub-manager"></div>
       <div id="approve-list"></div>
     </div>
   </div>
@@ -1284,6 +1302,130 @@ async function loadDashboard() {
   } else {
     expBar.style.display = 'none';
   }
+
+  // Load unsubmitted past weeks banner
+  loadUnsubmittedBanner(monday);
+}
+
+// ── UNSUBMITTED TIME BANNERS (Employee) ─────────────────────
+async function loadUnsubmittedBanner(currentMonday) {
+  const container = document.getElementById('unsub-banners');
+  container.innerHTML = '';
+
+  // Look back 8 weeks for time entries
+  const eightWeeksAgo = new Date(currentMonday);
+  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
+
+  // Get all time entries from past 8 weeks (excluding current week)
+  const prevFriday = new Date(currentMonday);
+  prevFriday.setDate(prevFriday.getDate() - 1);
+
+  const { data: entries } = await sb.from('time_entries')
+    .select('entry_date, calculated_hours')
+    .eq('employee_id', WMEAuth.getEmployeeId())
+    .gte('entry_date', isoDate(eightWeeksAgo))
+    .lte('entry_date', isoDate(prevFriday))
+    .order('entry_date');
+
+  if (!entries || entries.length === 0) return;
+
+  // Group entries by week (Monday)
+  const weekMap = {};
+  entries.forEach(e => {
+    const mon = getMonday(new Date(e.entry_date + 'T00:00:00'));
+    const key = isoDate(mon);
+    if (!weekMap[key]) weekMap[key] = { monday: mon, hours: 0 };
+    weekMap[key].hours += parseFloat(e.calculated_hours || 0);
+  });
+
+  // Get timesheets that are already submitted or approved for these weeks
+  const weekKeys = Object.keys(weekMap);
+  const { data: sheets } = await sb.from('timesheets')
+    .select('week_starting, status')
+    .eq('employee_id', WMEAuth.getEmployeeId())
+    .in('week_starting', weekKeys)
+    .in('status', ['Submitted', 'Approved']);
+
+  const submittedWeeks = new Set((sheets || []).map(s => s.week_starting));
+
+  // Build banners for unsubmitted weeks
+  const unsubWeeks = weekKeys.filter(k => !submittedWeeks.has(k)).sort().reverse();
+  if (unsubWeeks.length === 0) return;
+
+  let html = '';
+  unsubWeeks.forEach(k => {
+    const w = weekMap[k];
+    const hrs = w.hours.toFixed(1);
+    const label = formatWeekRange(w.monday);
+    html += `<div class="unsub-banner">
+      <div class="unsub-banner-text">
+        <div class="unsub-banner-title">Unsubmitted timesheet</div>
+        <div class="unsub-banner-detail">w/c ${label} · ${hrs} hours entered</div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="submitTimesheet(new Date('${k}T00:00:00'))" style="background:#E65100;min-width:80px">Submit</button>
+    </div>`;
+  });
+  container.innerHTML = html;
+}
+
+// ── UNSUBMITTED TIME SECTION (Manager approval screen) ──────
+async function loadUnsubmittedForManagers() {
+  const container = document.getElementById('unsub-manager');
+  container.innerHTML = '';
+
+  const now = new Date();
+  const currentMonday = getMonday(now);
+  const eightWeeksAgo = new Date(currentMonday);
+  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
+  const prevFriday = new Date(currentMonday);
+  prevFriday.setDate(prevFriday.getDate() - 1);
+
+  // Get ALL time entries from past 8 weeks (excluding current week)
+  const { data: entries } = await sb.from('time_entries')
+    .select('employee_id, entry_date, calculated_hours, employees!time_entries_employee_id_fkey(display_name)')
+    .gte('entry_date', isoDate(eightWeeksAgo))
+    .lte('entry_date', isoDate(prevFriday))
+    .order('entry_date');
+
+  if (!entries || entries.length === 0) return;
+
+  // Group by employee + week
+  const map = {};
+  entries.forEach(e => {
+    const mon = getMonday(new Date(e.entry_date + 'T00:00:00'));
+    const key = e.employee_id + '|' + isoDate(mon);
+    if (!map[key]) map[key] = { employeeId: e.employee_id, name: e.employees?.display_name || 'Unknown', monday: mon, weekKey: isoDate(mon), hours: 0 };
+    map[key].hours += parseFloat(e.calculated_hours || 0);
+  });
+
+  // Get all submitted/approved timesheets for this period
+  const { data: sheets } = await sb.from('timesheets')
+    .select('employee_id, week_starting, status')
+    .gte('week_starting', isoDate(eightWeeksAgo))
+    .lte('week_starting', isoDate(prevFriday))
+    .in('status', ['Submitted', 'Approved']);
+
+  const submittedSet = new Set((sheets || []).map(s => s.employee_id + '|' + s.week_starting));
+
+  // Filter to unsubmitted only
+  const unsub = Object.values(map).filter(r => !submittedSet.has(r.employeeId + '|' + r.weekKey));
+  if (unsub.length === 0) return;
+
+  // Sort by week desc, then name
+  unsub.sort((a, b) => b.weekKey.localeCompare(a.weekKey) || a.name.localeCompare(b.name));
+
+  let rows = unsub.map(r =>
+    `<div class="unsub-row">
+      <div class="unsub-row-name">${esc(r.name)}</div>
+      <div class="unsub-row-week">w/c ${formatDateShort(r.monday)}</div>
+      <div class="unsub-row-hours">${r.hours.toFixed(1)} hrs</div>
+    </div>`
+  ).join('');
+
+  container.innerHTML = `<div class="unsub-section" onclick="this.classList.toggle('collapsed')">
+    <div class="unsub-section-hdr">Unsubmitted Time (${unsub.length} entries from ${new Set(unsub.map(r => r.name)).size} employees)</div>
+    <div class="unsub-section-body">${rows}</div>
+  </div>`;
 }
 
 // ── LOG DAY ──────────────────────────────────────────────────
@@ -2192,6 +2334,8 @@ function viewHistoryWeek(weekStr) {
 
 // ── APPROVALS ────────────────────────────────────────────────
 async function loadApprovals() {
+  loadUnsubmittedForManagers();
+
   const { data: sheets } = await sb.from('timesheets')
     .select('*, employees!timesheets_employee_id_fkey(display_name, rate_type, rate)')
     .eq('status', 'Submitted')
