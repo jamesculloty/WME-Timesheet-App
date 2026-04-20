@@ -868,10 +868,22 @@
 
       <!-- Reports panel -->
       <div id="admin-reports" style="display:none">
-        <div class="info-box">
-          <strong>Coming soon</strong>
-          CSV export of hours by project, employee, and week.
+        <div class="card">
+          <div class="card-title">Labour by Project</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="field"><label>From</label><input type="date" id="rpt-from" /></div>
+            <div class="field"><label>To</label><input type="date" id="rpt-to" /></div>
+          </div>
+          <div class="field">
+            <label>Project</label>
+            <select id="rpt-project"><option value="">All projects</option></select>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary" onclick="runLabourReport()" style="flex:1">Run Report</button>
+            <button class="btn btn-outline" id="rpt-csv-btn" onclick="exportLabourReportCSV()" style="flex:1;display:none">Export CSV</button>
+          </div>
         </div>
+        <div id="rpt-results"></div>
       </div>
     </div>
     <nav class="nav">
@@ -2552,11 +2564,183 @@ function showAdminPanel(panel) {
   document.getElementById('admin-approvals').style.display = panel === 'approvals' ? '' : 'none';
   document.getElementById('admin-logtime').style.display = panel === 'logtime' ? '' : 'none';
   document.getElementById('admin-reports').style.display = panel === 'reports' ? '' : 'none';
+  if (panel === 'reports') initLabourReport();
 }
 
 async function loadAdmin() {
   if (!isManager()) return showScreen('scr-dash');
   await loadEmployeeList();
+}
+
+// ── LABOUR REPORT ────────────────────────────────────────────
+let _lastReportRows = [];
+
+function initLabourReport() {
+  const to = document.getElementById('rpt-to');
+  const from = document.getElementById('rpt-from');
+  if (!to.value) {
+    const now = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    from.value = isoDate(first);
+    to.value = isoDate(now);
+  }
+  const sel = document.getElementById('rpt-project');
+  if (sel.options.length <= 1 && projects.length) {
+    projects.forEach(p => {
+      sel.innerHTML += `<option value="${esc(p.name)}">${esc(p.name)}</option>`;
+    });
+  }
+}
+
+async function runLabourReport() {
+  const from = document.getElementById('rpt-from').value;
+  const to   = document.getElementById('rpt-to').value;
+  const proj = document.getElementById('rpt-project').value;
+  if (!from || !to) return toast('Pick a date range');
+  if (from > to)   return toast('From date must be before To date');
+
+  let q = sb.from('time_entries')
+    .select('project_name, entry_date, calculated_hours, entry_type, employees!time_entries_employee_id_fkey(id, display_name, role, rate_type, rate)')
+    .in('entry_type', WORK_TYPES)
+    .not('project_name', 'is', null)
+    .gte('entry_date', from)
+    .lte('entry_date', to);
+  if (proj) q = q.eq('project_name', proj);
+
+  const { data, error } = await q;
+  if (error) return toast('Report failed: ' + error.message);
+
+  // Aggregate: project → employee → { hours, days (set of dates), halfDays, cost }
+  const byProj = {};
+  (data || []).forEach(e => {
+    const emp = e.employees || {};
+    const pk = e.project_name;
+    const ek = emp.id || 'unknown';
+    byProj[pk] = byProj[pk] || { name: pk, emps: {}, hours: 0, cost: 0 };
+    const bucket = byProj[pk].emps[ek] = byProj[pk].emps[ek] || {
+      name: emp.display_name || 'Unknown',
+      role: emp.role || '',
+      rateType: emp.rate_type || 'hourly',
+      rate: parseFloat(emp.rate || 0),
+      hours: 0,
+      dates: new Set(),
+      halfDays: 0
+    };
+    const hrs = parseFloat(e.calculated_hours || 0);
+    bucket.hours += hrs;
+    bucket.dates.add(e.entry_date);
+    if (e.entry_type === 'half_day_work') bucket.halfDays += 1;
+  });
+
+  // Compute cost per employee bucket, plus project totals
+  const rows = [];
+  Object.values(byProj).forEach(p => {
+    Object.values(p.emps).forEach(b => {
+      const days = b.dates.size;
+      let cost = 0;
+      if (b.rateType === 'hourly') {
+        cost = b.hours * b.rate;
+      } else if (b.rateType === 'daily') {
+        const fullDays = days - b.halfDays;
+        cost = (fullDays * b.rate) + (b.halfDays * b.rate * 0.5);
+      } else if (b.rateType === 'salary') {
+        // 1820 = 52 weeks × 35 hrs — approximation for allocation
+        cost = b.hours * (b.rate / 1820);
+      }
+      b.days = days;
+      b.cost = cost;
+      p.hours += b.hours;
+      p.cost  += cost;
+      rows.push({
+        project: p.name,
+        employee: b.name,
+        role: b.role,
+        rateType: b.rateType,
+        rate: b.rate,
+        days: days,
+        hours: b.hours,
+        cost: cost
+      });
+    });
+  });
+  _lastReportRows = rows;
+
+  const container = document.getElementById('rpt-results');
+  const projList = Object.values(byProj).sort((a, b) => b.hours - a.hours);
+
+  if (projList.length === 0) {
+    container.innerHTML = '<div class="empty"><div class="empty-icon">&#128202;</div><p>No work entries in this range</p></div>';
+    document.getElementById('rpt-csv-btn').style.display = 'none';
+    return;
+  }
+
+  const grandHours = projList.reduce((s, p) => s + p.hours, 0);
+  const grandCost  = projList.reduce((s, p) => s + p.cost, 0);
+  const empCount   = new Set(rows.map(r => r.employee)).size;
+
+  let html = `<div class="card" style="background:var(--green-lt)">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <strong>${grandHours.toFixed(1)}h</strong>
+      <span>${projList.length} project${projList.length === 1 ? '' : 's'}</span>
+      <span>${empCount} ${empCount === 1 ? 'person' : 'people'}</span>
+      <strong>&pound;${grandCost.toFixed(2)}</strong>
+    </div>
+  </div>`;
+
+  projList.forEach(p => {
+    const emps = Object.values(p.emps).sort((a, b) => b.hours - a.hours);
+    html += `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <strong>${esc(p.name)}</strong>
+        <span>${p.hours.toFixed(1)}h &middot; &pound;${p.cost.toFixed(2)}</span>
+      </div>`;
+    emps.forEach(b => {
+      html += `<div class="emp-row" style="font-size:13px">
+        <div style="flex:1">
+          <div>${esc(b.name)}</div>
+          <div style="color:var(--muted);font-size:11px">${esc(b.role)} &middot; ${b.days} day${b.days === 1 ? '' : 's'}</div>
+        </div>
+        <div style="text-align:right">
+          <div>${b.hours.toFixed(1)}h</div>
+          <div style="color:var(--muted);font-size:11px">&pound;${b.cost.toFixed(2)}</div>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  });
+
+  container.innerHTML = html;
+  document.getElementById('rpt-csv-btn').style.display = '';
+}
+
+function exportLabourReportCSV() {
+  if (!_lastReportRows.length) return toast('Run the report first');
+  const from = document.getElementById('rpt-from').value;
+  const to   = document.getElementById('rpt-to').value;
+  const header = ['Project', 'Employee', 'Role', 'Rate Type', 'Rate', 'Days', 'Hours', 'Cost'];
+  const csvCell = v => {
+    const s = String(v == null ? '' : v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = [header.join(',')];
+  _lastReportRows
+    .slice()
+    .sort((a, b) => a.project.localeCompare(b.project) || b.hours - a.hours)
+    .forEach(r => {
+      lines.push([
+        r.project, r.employee, r.role, r.rateType,
+        r.rate.toFixed(2), r.days, r.hours.toFixed(2), r.cost.toFixed(2)
+      ].map(csvCell).join(','));
+    });
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `labour-by-project_${from}_to_${to}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 async function loadEmployeeList() {
