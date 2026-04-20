@@ -707,10 +707,10 @@
     </div>
     <div class="body">
       <div class="seg">
-        <button class="seg-btn active" onclick="showAdminPanel('employees')">Employees</button>
-        <button class="seg-btn" onclick="showAdminPanel('approvals')">Approvals</button>
-        <button class="seg-btn" onclick="showAdminPanel('logtime')">Log Time</button>
-        <button class="seg-btn" onclick="showAdminPanel('reports')">Reports</button>
+        <button class="seg-btn active" id="seg-employees" onclick="showAdminPanel('employees')">Employees</button>
+        <button class="seg-btn" id="seg-approvals" onclick="showAdminPanel('approvals')">Approvals</button>
+        <button class="seg-btn" id="seg-logtime" onclick="showAdminPanel('logtime')">Log Time</button>
+        <button class="seg-btn" id="seg-reports" onclick="showAdminPanel('reports')">Reports</button>
       </div>
 
       <!-- Employees panel -->
@@ -729,6 +729,7 @@
                 <option value="operative">Operative</option>
                 <option value="maintenance">Maintenance</option>
                 <option value="office">Office</option>
+                <option value="supervisor">PM/Supervisor</option>
                 <option value="manager">Manager</option>
                 <option value="admin">Admin</option>
               </select>
@@ -794,6 +795,7 @@
                 <option value="operative">Operative</option>
                 <option value="maintenance">Maintenance</option>
                 <option value="office">Office</option>
+                <option value="supervisor">PM/Supervisor</option>
                 <option value="manager">Manager</option>
                 <option value="admin">Admin</option>
               </select>
@@ -1000,10 +1002,11 @@ async function signOut() { await WMEAuth.signOut(); }
 // ── ADMIN TAB VISIBILITY ────────────────────────────────────
 function isAdmin()   { return WMEAuth.isAdmin(); }
 function isManager() { return WMEAuth.isManager(); }
+function isSupervisor() { return WMEAuth.hasRole('supervisor'); }
 function isDailyRate() { const emp = WMEAuth.getEmployee(); return emp && emp.rate_type === 'daily'; }
 
 function showAdminTabs() {
-  const show = isManager();
+  const show = isSupervisor();
   document.getElementById('nav-admin').style.display = show ? '' : 'none';
   const wa = document.getElementById('nav-admin-week');
   if (wa) wa.style.display = show ? '' : 'none';
@@ -2558,18 +2561,36 @@ async function rejectTimesheet(id) {
 
 // ── ADMIN ────────────────────────────────────────────────────
 function showAdminPanel(panel) {
-  document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
-  document.getElementById('admin-employees').style.display = panel === 'employees' ? '' : 'none';
-  document.getElementById('admin-approvals').style.display = panel === 'approvals' ? '' : 'none';
-  document.getElementById('admin-logtime').style.display = panel === 'logtime' ? '' : 'none';
-  document.getElementById('admin-reports').style.display = panel === 'reports' ? '' : 'none';
-  if (panel === 'reports') initLabourReport();
+  showAdminPanelByName(panel);
 }
 
 async function loadAdmin() {
-  if (!isManager()) return showScreen('scr-dash');
-  await loadEmployeeList();
+  if (!isSupervisor()) return showScreen('scr-dash');
+
+  // Hide manager-only tabs from supervisors (salaries, approvals, cost reports)
+  const mgr = isManager();
+  document.getElementById('seg-employees').style.display = mgr ? '' : 'none';
+  document.getElementById('seg-approvals').style.display = mgr ? '' : 'none';
+  document.getElementById('seg-reports').style.display   = mgr ? '' : 'none';
+
+  if (mgr) {
+    showAdminPanelByName('employees');
+    await loadEmployeeList();
+  } else {
+    // Supervisor sees only Log Time
+    showAdminPanelByName('logtime');
+  }
+}
+
+function showAdminPanelByName(panel) {
+  document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById('seg-' + panel);
+  if (btn) btn.classList.add('active');
+  document.getElementById('admin-employees').style.display = panel === 'employees' ? '' : 'none';
+  document.getElementById('admin-approvals').style.display = panel === 'approvals' ? '' : 'none';
+  document.getElementById('admin-logtime').style.display   = panel === 'logtime'   ? '' : 'none';
+  document.getElementById('admin-reports').style.display   = panel === 'reports'   ? '' : 'none';
+  if (panel === 'reports') initLabourReport();
 }
 
 // ── LABOUR REPORT ────────────────────────────────────────────
