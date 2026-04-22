@@ -109,6 +109,8 @@
     .badge-sick      { background: var(--amber-lt); color: var(--amber-tx); }
     .badge-absent    { background: #F0F0F0; color: #666; }
     .badge-halfday   { background: var(--green-lt); color: var(--green); }
+    .badge-college   { background: #EDE7F6; color: #5E35B1; }
+    .badge-unpaid    { background: #FFF3E0; color: #BF360C; }
 
     /* ── Form fields ── */
     .field { margin-bottom: 14px; }
@@ -315,6 +317,18 @@
         <div class="stat"><div class="stat-n" id="stat-week">—</div><div class="stat-l">Current week</div></div>
       </div>
 
+      <!-- Holiday summary (shown only if the employee has an allowance) -->
+      <div class="card" id="hol-card" style="display:none;margin-bottom:14px">
+        <div class="card-title">Annual Leave (<span id="hol-year"></span>)</div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:13px">
+          <div><div style="color:var(--muted);font-size:12px">Allowance</div><div style="font-weight:700;font-size:18px" id="hol-allowance">0</div></div>
+          <div><div style="color:var(--muted);font-size:12px">Statutory</div><div style="font-weight:700;font-size:18px" id="hol-statutory">0</div></div>
+          <div><div style="color:var(--muted);font-size:12px">Discretionary</div><div style="font-weight:700;font-size:18px" id="hol-discretionary">0</div></div>
+          <div><div style="color:var(--muted);font-size:12px">Remaining</div><div style="font-weight:700;font-size:18px;color:var(--green)" id="hol-remaining">0</div></div>
+        </div>
+        <div id="hol-adjust-row" style="display:none;font-size:12px;color:var(--muted);margin-top:6px">Adjustment by admin: <span id="hol-adjustment">0</span> days (leave taken outside the app)</div>
+      </div>
+
       <div id="unsub-banners"></div>
 
       <div id="submit-reminder" style="display:none;background:#FDF6E3;border:1.5px solid #B8860B;border-radius:10px;padding:14px 16px;margin-bottom:14px">
@@ -395,6 +409,8 @@
             <option value="bank_holiday">Bank Holiday</option>
             <option value="sick">Sick</option>
             <option value="absent">Absent</option>
+            <option value="college_paid">College (Paid)</option>
+            <option value="college_not_paid">College (Unpaid)</option>
           </select>
         </div>
         <div id="entry-leave-msg" class="info-box" style="display:none"></div>
@@ -776,6 +792,10 @@
               <label>Holiday (days)</label>
               <input id="emp-holidays" type="number" min="0" value="21" />
             </div>
+            <div class="field">
+              <label>Holiday taken outside app (days)</label>
+              <input id="emp-hol-adj" type="number" value="0" step="0.5" title="Days of holiday this year not recorded in the app (e.g. pre-launch or hand-tracked)." />
+            </div>
           </div>
           <button class="btn btn-primary" onclick="addEmployee()">Add Employee</button>
         </div>
@@ -841,6 +861,10 @@
             <div class="field">
               <label>Holiday (days)</label>
               <input id="edit-holidays" type="number" min="0" value="21" />
+            </div>
+            <div class="field">
+              <label>Holiday taken outside app (days)</label>
+              <input id="edit-hol-adj" type="number" value="0" step="0.5" title="Days of holiday this year not recorded in the app (e.g. pre-launch or hand-tracked)." />
             </div>
           </div>
           <div style="display:flex;gap:8px">
@@ -1112,8 +1136,12 @@ function updateEntryCalc() {
 }
 
 // ── ENTRY TYPE HELPERS ───────────────────────────────────────
-const LEAVE_TYPES = ['holiday', 'half_day_holiday', 'bank_holiday', 'sick', 'absent'];
+// "Leave" here means entries without a project — includes leave, statutory,
+// bank holidays, and college days. College days are not deducted from the
+// holiday allowance (getHolidaysRemaining filters explicitly on holiday types).
+const LEAVE_TYPES = ['holiday', 'half_day_holiday', 'bank_holiday', 'sick', 'absent', 'college_paid', 'college_not_paid'];
 const WORK_TYPES = ['work', 'half_day_work'];
+const HOLIDAY_COUNTING_TYPES = ['holiday', 'half_day_holiday']; // count against annual allowance
 
 function isLeaveType(t) { return LEAVE_TYPES.includes(t); }
 
@@ -1125,6 +1153,8 @@ function entryTypeBadge(t) {
     case 'half_day_work':     return '<span class="badge badge-halfday">Half Day</span>';
     case 'sick':              return '<span class="badge badge-sick">Sick</span>';
     case 'absent':            return '<span class="badge badge-absent">Absent</span>';
+    case 'college_paid':      return '<span class="badge badge-college">College (Paid)</span>';
+    case 'college_not_paid':  return '<span class="badge badge-unpaid">College (Unpaid)</span>';
     default: return '';
   }
 }
@@ -1138,6 +1168,8 @@ function entryTypeLabel(t) {
     case 'bank_holiday': return 'Bank Holiday';
     case 'sick': return 'Sick';
     case 'absent': return 'Absent';
+    case 'college_paid': return 'College (Paid)';
+    case 'college_not_paid': return 'College (Unpaid)';
     default: return t;
   }
 }
@@ -1172,19 +1204,36 @@ function onEntryTypeChange() {
   }
 }
 
-async function getHolidaysRemaining() {
-  const emp = WMEAuth.getEmployee();
+async function getHolidaysRemaining(employeeId, employeeRecord) {
+  // Compute the year's holiday usage for an employee.
+  // Defaults to the current user if no args supplied (preserves the existing call sites).
+  const empId = employeeId || WMEAuth.getEmployeeId();
+  const emp = employeeRecord || WMEAuth.getEmployee();
   const allowance = emp.holiday_allowance ?? 21;
+  const adjustment = emp.holiday_taken_adjustment ?? 0;
   const year = new Date().getFullYear();
   const { data } = await sb.from('time_entries')
-    .select('entry_type')
-    .eq('employee_id', WMEAuth.getEmployeeId())
+    .select('entry_type, notes, entry_date')
+    .eq('employee_id', empId)
     .in('entry_type', ['holiday', 'half_day_holiday'])
     .gte('entry_date', year + '-01-01')
     .lte('entry_date', year + '-12-31');
-  let used = 0;
-  (data || []).forEach(e => { used += e.entry_type === 'half_day_holiday' ? 0.5 : 1; });
-  return { allowance, used, remaining: allowance - used };
+  let statutory = 0;
+  let discretionary = 0;
+  (data || []).forEach(e => {
+    const days = e.entry_type === 'half_day_holiday' ? 0.5 : 1;
+    if ((e.notes || '').startsWith('Statutory')) statutory += days;
+    else discretionary += days;
+  });
+  const used = statutory + discretionary;
+  return {
+    allowance,
+    statutory,
+    discretionary,
+    adjustment,
+    used,
+    remaining: allowance - used - adjustment
+  };
 }
 
 // ── DASHBOARD ────────────────────────────────────────────────
@@ -1224,6 +1273,27 @@ async function loadDashboard() {
   document.getElementById('stat-status').style.fontSize = '16px';
   document.getElementById('stat-week').textContent = formatWeekRange(monday);
   document.getElementById('stat-week').style.fontSize = '13px';
+
+  // Holiday summary card (only for employees with an allowance)
+  const empRec = WMEAuth.getEmployee();
+  const holCard = document.getElementById('hol-card');
+  if (empRec && (empRec.holiday_allowance || 0) > 0) {
+    const hol = await getHolidaysRemaining();
+    holCard.style.display = '';
+    document.getElementById('hol-year').textContent = new Date().getFullYear();
+    document.getElementById('hol-allowance').textContent = hol.allowance;
+    document.getElementById('hol-statutory').textContent = hol.statutory;
+    document.getElementById('hol-discretionary').textContent = hol.discretionary;
+    document.getElementById('hol-remaining').textContent = hol.remaining;
+    if (hol.adjustment !== 0) {
+      document.getElementById('hol-adjust-row').style.display = '';
+      document.getElementById('hol-adjustment').textContent = hol.adjustment;
+    } else {
+      document.getElementById('hol-adjust-row').style.display = 'none';
+    }
+  } else {
+    holCard.style.display = 'none';
+  }
 
   // Pending approvals (managers only)
   if (isManager()) {
@@ -1784,6 +1854,8 @@ async function openBulkEntry() {
           <option value="bank_holiday">Bank Holiday</option>
           <option value="sick">Sick</option>
           <option value="absent">Absent</option>
+          <option value="college_paid">College (Paid)</option>
+          <option value="college_not_paid">College (Unpaid)</option>
         </select>
       </div>
       <div id="bulk-time-row-${i}" ${daily ? 'style="display:none"' : ''}>
@@ -2743,6 +2815,7 @@ async function addEmployee() {
   const sickPay = document.getElementById('emp-sickpay').value;
   const absentPay = document.getElementById('emp-absentpay').value;
   const holidays = parseInt(document.getElementById('emp-holidays').value) || 21;
+  const holAdj = parseFloat(document.getElementById('emp-hol-adj').value) || 0;
 
   if (!first || !last) return toast('Enter first and last name');
 
@@ -2756,7 +2829,8 @@ async function addEmployee() {
     rate,
     sick_pay: sickPay,
     absent_pay: absentPay,
-    holiday_allowance: holidays
+    holiday_allowance: holidays,
+    holiday_taken_adjustment: holAdj
   });
 
   if (error) return toast('Error: ' + error.message, 4000);
@@ -2767,6 +2841,7 @@ async function addEmployee() {
   document.getElementById('emp-email').value = '';
   document.getElementById('emp-rate').value = '0';
   document.getElementById('emp-holidays').value = '21';
+  document.getElementById('emp-hol-adj').value = '0';
   await loadEmployeeList();
 }
 
@@ -2785,6 +2860,7 @@ async function editEmployee(id) {
   document.getElementById('edit-sickpay').value = emp.sick_pay || 'paid';
   document.getElementById('edit-absentpay').value = emp.absent_pay || 'unpaid';
   document.getElementById('edit-holidays').value = emp.holiday_allowance ?? 21;
+  document.getElementById('edit-hol-adj').value = emp.holiday_taken_adjustment ?? 0;
 
   // Non-admins can't assign admin role
   const adminOpt = document.querySelector('#edit-role option[value="admin"]');
@@ -2806,6 +2882,7 @@ async function saveEditEmployee() {
   const sickPay = document.getElementById('edit-sickpay').value;
   const absentPay = document.getElementById('edit-absentpay').value;
   const holidays = parseInt(document.getElementById('edit-holidays').value) || 21;
+  const holAdj = parseFloat(document.getElementById('edit-hol-adj').value) || 0;
 
   if (!first || !last) return toast('First and last name required');
 
@@ -2819,7 +2896,8 @@ async function saveEditEmployee() {
     rate,
     sick_pay: sickPay,
     absent_pay: absentPay,
-    holiday_allowance: holidays
+    holiday_allowance: holidays,
+    holiday_taken_adjustment: holAdj
   }).eq('id', id);
 
   if (error) return toast('Error: ' + error.message, 4000);
@@ -2977,6 +3055,8 @@ async function loadProxyWeek() {
           <option value="bank_holiday">Bank Holiday</option>
           <option value="sick">Sick</option>
           <option value="absent">Absent</option>
+          <option value="college_paid">College (Paid)</option>
+          <option value="college_not_paid">College (Unpaid)</option>
         </select>` : ''}
       </div>
     </div>`;
