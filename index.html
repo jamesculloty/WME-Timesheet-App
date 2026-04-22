@@ -813,6 +813,10 @@
               <label>Holiday taken outside app (days)</label>
               <input id="emp-hol-adj" type="number" value="0" step="0.5" title="Days of holiday this year not recorded in the app (e.g. pre-launch or hand-tracked)." />
             </div>
+            <div class="field">
+              <label>Employer on-cost override (%)</label>
+              <input id="emp-oncost" type="number" step="0.01" min="0" placeholder="Default: employed 12%, sub/agency 0%" title="Employer NIC + pension uplift as % of gross. Leave blank to use the employment-type default. Set to 0 for employees whose Employer NIC is fully relieved (Employment Allowance)." />
+            </div>
           </div>
           <button class="btn btn-primary" onclick="addEmployee()">Add Employee</button>
         </div>
@@ -893,6 +897,10 @@
             <div class="field">
               <label>Holiday taken outside app (days)</label>
               <input id="edit-hol-adj" type="number" value="0" step="0.5" title="Days of holiday this year not recorded in the app (e.g. pre-launch or hand-tracked)." />
+            </div>
+            <div class="field">
+              <label>Employer on-cost override (%)</label>
+              <input id="edit-oncost" type="number" step="0.01" min="0" placeholder="Default: employed 12%, sub/agency 0%" title="Employer NIC + pension uplift as % of gross. Leave blank to use the employment-type default. Set to 0 for employees whose Employer NIC is fully relieved (Employment Allowance)." />
             </div>
           </div>
           <div style="display:flex;gap:8px">
@@ -2751,7 +2759,7 @@ async function runLabourReport() {
   if (from > to)   return toast('From date must be before To date');
 
   let q = sb.from('time_entries')
-    .select('project_name, entry_date, calculated_hours, entry_type, employees!time_entries_employee_id_fkey(id, display_name, role, rate_type, rate)')
+    .select('project_name, entry_date, calculated_hours, entry_type, employees!time_entries_employee_id_fkey(id, display_name, role, rate_type, rate, employment_type, employer_oncost_rate)')
     .in('entry_type', WORK_TYPES)
     .not('project_name', 'is', null)
     .gte('entry_date', from)
@@ -2768,11 +2776,18 @@ async function runLabourReport() {
     const pk = e.project_name;
     const ek = emp.id || 'unknown';
     byProj[pk] = byProj[pk] || { name: pk, emps: {}, hours: 0, cost: 0 };
+    // Effective on-cost rate: override wins; else default by employment_type.
+    // 'employed' → 12%, 'subcontractor' / 'agency' → 0%.
+    const ovr = emp.employer_oncost_rate;
+    const effectiveOncost = (ovr == null)
+      ? (emp.employment_type === 'employed' ? 0.12 : 0)
+      : parseFloat(ovr);
     const bucket = byProj[pk].emps[ek] = byProj[pk].emps[ek] || {
       name: emp.display_name || 'Unknown',
       role: emp.role || '',
       rateType: emp.rate_type || 'hourly',
       rate: parseFloat(emp.rate || 0),
+      oncostRate: effectiveOncost,
       hours: 0,
       dates: new Set(),
       halfDays: 0
@@ -2783,9 +2798,11 @@ async function runLabourReport() {
     if (e.entry_type === 'half_day_work') bucket.halfDays += 1;
   });
 
-  // Compute cost per employee bucket, plus project totals
+  // Compute cost per employee bucket, plus project totals.
+  // True cost = gross + employer on-cost (NIC + pension uplift).
   const rows = [];
   Object.values(byProj).forEach(p => {
+    p.oncost = 0; p.trueCost = 0;
     Object.values(p.emps).forEach(b => {
       const days = b.dates.size;
       let cost = 0;
@@ -2795,22 +2812,30 @@ async function runLabourReport() {
         const fullDays = days - b.halfDays;
         cost = (fullDays * b.rate) + (b.halfDays * b.rate * 0.5);
       } else if (b.rateType === 'salary') {
-        // 1820 = 52 weeks × 35 hrs — approximation for allocation
         cost = b.hours * (b.rate / 1820);
       }
+      const oncost = cost * b.oncostRate;
+      const trueCost = cost + oncost;
       b.days = days;
       b.cost = cost;
-      p.hours += b.hours;
-      p.cost  += cost;
+      b.oncost = oncost;
+      b.trueCost = trueCost;
+      p.hours   += b.hours;
+      p.cost    += cost;
+      p.oncost  += oncost;
+      p.trueCost += trueCost;
       rows.push({
         project: p.name,
         employee: b.name,
         role: b.role,
         rateType: b.rateType,
         rate: b.rate,
+        oncostPct: b.oncostRate * 100,
         days: days,
         hours: b.hours,
-        cost: cost
+        cost: cost,
+        oncost: oncost,
+        trueCost: trueCost
       });
     });
   });
@@ -2827,6 +2852,8 @@ async function runLabourReport() {
 
   const grandHours = projList.reduce((s, p) => s + p.hours, 0);
   const grandCost  = projList.reduce((s, p) => s + p.cost, 0);
+  const grandOnc   = projList.reduce((s, p) => s + p.oncost, 0);
+  const grandTrue  = projList.reduce((s, p) => s + p.trueCost, 0);
   const empCount   = new Set(rows.map(r => r.employee)).size;
 
   let html = `<div class="card" style="background:var(--green-lt)">
@@ -2834,7 +2861,10 @@ async function runLabourReport() {
       <strong>${grandHours.toFixed(1)}h</strong>
       <span>${projList.length} project${projList.length === 1 ? '' : 's'}</span>
       <span>${empCount} ${empCount === 1 ? 'person' : 'people'}</span>
-      <strong>&pound;${grandCost.toFixed(2)}</strong>
+      <div style="text-align:right">
+        <div><strong>&pound;${grandTrue.toFixed(2)}</strong> true cost</div>
+        <div style="font-size:11px;color:var(--muted)">&pound;${grandCost.toFixed(2)} gross + &pound;${grandOnc.toFixed(2)} on-costs</div>
+      </div>
     </div>
   </div>`;
 
@@ -2843,9 +2873,13 @@ async function runLabourReport() {
     html += `<div class="card">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
         <strong>${esc(p.name)}</strong>
-        <span>${p.hours.toFixed(1)}h &middot; &pound;${p.cost.toFixed(2)}</span>
+        <div style="text-align:right;font-size:13px">
+          <div>${p.hours.toFixed(1)}h &middot; <strong>&pound;${p.trueCost.toFixed(2)}</strong></div>
+          <div style="font-size:11px;color:var(--muted)">&pound;${p.cost.toFixed(2)} + &pound;${p.oncost.toFixed(2)} on-cost</div>
+        </div>
       </div>`;
     emps.forEach(b => {
+      const oncostTxt = b.oncost > 0 ? ' (+&pound;' + b.oncost.toFixed(2) + ' on-cost)' : '';
       html += `<div class="emp-row" style="font-size:13px">
         <div style="flex:1">
           <div>${esc(b.name)}</div>
@@ -2853,7 +2887,7 @@ async function runLabourReport() {
         </div>
         <div style="text-align:right">
           <div>${b.hours.toFixed(1)}h</div>
-          <div style="color:var(--muted);font-size:11px">&pound;${b.cost.toFixed(2)}</div>
+          <div style="color:var(--muted);font-size:11px">&pound;${b.trueCost.toFixed(2)}${oncostTxt}</div>
         </div>
       </div>`;
     });
@@ -2868,7 +2902,7 @@ function exportLabourReportCSV() {
   if (!_lastReportRows.length) return toast('Run the report first');
   const from = document.getElementById('rpt-from').value;
   const to   = document.getElementById('rpt-to').value;
-  const header = ['Project', 'Employee', 'Role', 'Rate Type', 'Rate', 'Days', 'Hours', 'Cost'];
+  const header = ['Project', 'Employee', 'Role', 'Rate Type', 'Rate', 'Days', 'Hours', 'Gross Cost', 'On-cost %', 'On-cost', 'True Cost'];
   const csvCell = v => {
     const s = String(v == null ? '' : v);
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
@@ -2880,7 +2914,9 @@ function exportLabourReportCSV() {
     .forEach(r => {
       lines.push([
         r.project, r.employee, r.role, r.rateType,
-        r.rate.toFixed(2), r.days, r.hours.toFixed(2), r.cost.toFixed(2)
+        r.rate.toFixed(2), r.days, r.hours.toFixed(2),
+        r.cost.toFixed(2), r.oncostPct.toFixed(2),
+        r.oncost.toFixed(2), r.trueCost.toFixed(2)
       ].map(csvCell).join(','));
     });
   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
@@ -2940,6 +2976,8 @@ async function addEmployee() {
   const holAdj = parseFloat(document.getElementById('emp-hol-adj').value) || 0;
   const holType = document.getElementById('emp-holtype').value;
   const accrualPct = parseFloat(document.getElementById('emp-accrual').value) || 12.07;
+  const oncostRaw = document.getElementById('emp-oncost').value.trim();
+  const oncostRate = oncostRaw === '' ? null : (parseFloat(oncostRaw) / 100);
 
   if (!first || !last) return toast('Enter first and last name');
 
@@ -2956,7 +2994,8 @@ async function addEmployee() {
     holiday_allowance: holType === 'accrued' ? 0 : holidays,
     holiday_taken_adjustment: holAdj,
     holiday_type: holType,
-    holiday_accrual_rate: accrualPct / 100
+    holiday_accrual_rate: accrualPct / 100,
+    employer_oncost_rate: oncostRate
   });
 
   if (error) return toast('Error: ' + error.message, 4000);
@@ -2989,6 +3028,7 @@ async function editEmployee(id) {
   document.getElementById('edit-hol-adj').value = emp.holiday_taken_adjustment ?? 0;
   document.getElementById('edit-holtype').value = emp.holiday_type || 'fixed';
   document.getElementById('edit-accrual').value = ((emp.holiday_accrual_rate ?? 0.1207) * 100).toFixed(2);
+  document.getElementById('edit-oncost').value = emp.employer_oncost_rate == null ? '' : (parseFloat(emp.employer_oncost_rate) * 100).toFixed(2);
   toggleHolModel('edit');
 
   // Non-admins can't assign admin role
@@ -3014,6 +3054,8 @@ async function saveEditEmployee() {
   const holAdj = parseFloat(document.getElementById('edit-hol-adj').value) || 0;
   const holType = document.getElementById('edit-holtype').value;
   const accrualPct = parseFloat(document.getElementById('edit-accrual').value) || 12.07;
+  const oncostRaw = document.getElementById('edit-oncost').value.trim();
+  const oncostRate = oncostRaw === '' ? null : (parseFloat(oncostRaw) / 100);
 
   if (!first || !last) return toast('First and last name required');
 
@@ -3030,7 +3072,8 @@ async function saveEditEmployee() {
     holiday_allowance: holType === 'accrued' ? 0 : holidays,
     holiday_taken_adjustment: holAdj,
     holiday_type: holType,
-    holiday_accrual_rate: accrualPct / 100
+    holiday_accrual_rate: accrualPct / 100,
+    employer_oncost_rate: oncostRate
   }).eq('id', id);
 
   if (error) return toast('Error: ' + error.message, 4000);
