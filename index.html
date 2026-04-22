@@ -327,6 +327,17 @@
           <div><div style="color:var(--muted);font-size:12px">Remaining</div><div style="font-weight:700;font-size:18px;color:var(--green)" id="hol-remaining">0</div></div>
         </div>
         <div id="hol-adjust-row" style="display:none;font-size:12px;color:var(--muted);margin-top:6px">Adjustment by admin: <span id="hol-adjustment">0</span> days (leave taken outside the app)</div>
+        <button type="button" id="hol-toggle-btn" onclick="toggleHolidayDates()" style="margin-top:10px;background:none;border:none;color:var(--green);font-size:13px;font-weight:600;cursor:pointer;padding:0">View dates taken ▾</button>
+        <div id="hol-dates" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:13px">
+          <div style="margin-bottom:10px">
+            <div style="font-weight:600;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">Statutory</div>
+            <div id="hol-stat-list" style="color:#333">—</div>
+          </div>
+          <div>
+            <div style="font-weight:600;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">Discretionary</div>
+            <div id="hol-disc-list" style="color:#333">—</div>
+          </div>
+        </div>
       </div>
 
       <div id="unsub-banners"></div>
@@ -1204,6 +1215,14 @@ function onEntryTypeChange() {
   }
 }
 
+function toggleHolidayDates() {
+  const el = document.getElementById('hol-dates');
+  const btn = document.getElementById('hol-toggle-btn');
+  const open = el.style.display !== 'none';
+  el.style.display = open ? 'none' : '';
+  btn.textContent = open ? 'View dates taken ▾' : 'Hide dates ▴';
+}
+
 async function getHolidaysRemaining(employeeId, employeeRecord) {
   // Compute the year's holiday usage for an employee.
   // Defaults to the current user if no args supplied (preserves the existing call sites).
@@ -1220,11 +1239,21 @@ async function getHolidaysRemaining(employeeId, employeeRecord) {
     .lte('entry_date', year + '-12-31');
   let statutory = 0;
   let discretionary = 0;
+  const statutoryDates = [];
+  const discretionaryDates = [];
   (data || []).forEach(e => {
     const days = e.entry_type === 'half_day_holiday' ? 0.5 : 1;
-    if ((e.notes || '').startsWith('Statutory')) statutory += days;
-    else discretionary += days;
+    const row = { date: e.entry_date, days, type: e.entry_type };
+    if ((e.notes || '').startsWith('Statutory')) {
+      statutory += days;
+      statutoryDates.push(row);
+    } else {
+      discretionary += days;
+      discretionaryDates.push(row);
+    }
   });
+  statutoryDates.sort((a, b) => a.date.localeCompare(b.date));
+  discretionaryDates.sort((a, b) => a.date.localeCompare(b.date));
   const used = statutory + discretionary;
   return {
     allowance,
@@ -1232,7 +1261,9 @@ async function getHolidaysRemaining(employeeId, employeeRecord) {
     discretionary,
     adjustment,
     used,
-    remaining: allowance - used - adjustment
+    remaining: allowance - used - adjustment,
+    statutoryDates,
+    discretionaryDates
   };
 }
 
@@ -1291,6 +1322,15 @@ async function loadDashboard() {
     } else {
       document.getElementById('hol-adjust-row').style.display = 'none';
     }
+    const fmt = rows => rows.length
+      ? rows.map(r => {
+          const d = new Date(r.date + 'T00:00:00');
+          const label = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+          return r.type === 'half_day_holiday' ? label + ' (½ day)' : label;
+        }).join(', ')
+      : '<span style="color:var(--muted)">None</span>';
+    document.getElementById('hol-stat-list').innerHTML = fmt(hol.statutoryDates);
+    document.getElementById('hol-disc-list').innerHTML = fmt(hol.discretionaryDates);
   } else {
     holCard.style.display = 'none';
   }
