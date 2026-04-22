@@ -1450,8 +1450,8 @@ async function submitTimesheetFor(employeeId, weekKey) {
   const friday = new Date(monday);
   friday.setDate(friday.getDate() + 6);
 
-  // Fetch employee record for rate calculations
-  const { data: emp } = await sb.from('employees').select('*').eq('id', employeeId).single();
+  // Fetch display name for the confirmation toast (cost is computed server-side)
+  const { data: emp } = await sb.from('employees_safe').select('display_name').eq('id', employeeId).single();
   if (!emp) return toast('Employee not found');
 
   // Fetch time entries for this employee and week
@@ -1464,48 +1464,12 @@ async function submitTimesheetFor(employeeId, weekKey) {
   const weekEntries = entries || [];
   if (weekEntries.length === 0) return toast('No entries to submit');
 
-  const totalHours = weekEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
-
-  // Calculate cost using same logic as submitTimesheet
-  const rate = parseFloat(emp.rate);
-  let totalCost = 0;
-  if (emp.rate_type === 'hourly') {
-    weekEntries.forEach(e => {
-      const type = e.entry_type || 'work';
-      const hrs = parseFloat(e.calculated_hours || 0);
-      if (type === 'work' || type === 'half_day_work') totalCost += hrs * rate;
-      else if (type === 'holiday' || type === 'half_day_holiday') totalCost += hrs * rate;
-      else if (type === 'sick') totalCost += emp.sick_pay === 'paid' ? hrs * rate : 0;
-      else if (type === 'absent') totalCost += emp.absent_pay === 'paid' ? hrs * rate : 0;
-    });
-  } else if (emp.rate_type === 'daily') {
-    weekEntries.forEach(e => {
-      const type = e.entry_type || 'work';
-      const dayVal = (type === 'half_day_work' || type === 'half_day_holiday') ? rate * 0.5 : rate;
-      if (type === 'work' || type === 'half_day_work') totalCost += dayVal;
-      else if (type === 'holiday' || type === 'half_day_holiday') totalCost += dayVal;
-      else if (type === 'sick') totalCost += emp.sick_pay === 'paid' ? dayVal : 0;
-      else if (type === 'absent') totalCost += emp.absent_pay === 'paid' ? dayVal : 0;
-    });
-  } else if (emp.rate_type === 'salary') {
-    totalCost = rate / 52;
-  }
-
-  // Expense total for this employee's week
-  const { data: expData } = await sb.from('expenses')
-    .select('amount')
-    .eq('employee_id', employeeId)
-    .eq('week_starting', weekKey);
-  const totalExpenses = (expData || []).reduce((sum, e) => sum + parseFloat(e.amount), 0);
-
-  // Upsert timesheet
+  // total_hours / total_cost / total_expenses are computed server-side
+  // by the recalc_timesheet_totals trigger.
   const { error } = await sb.from('timesheets').upsert({
     employee_id: employeeId,
     week_starting: weekKey,
     status: 'Submitted',
-    total_hours: totalHours,
-    total_cost: Math.round(totalCost * 100) / 100,
-    total_expenses: Math.round(totalExpenses * 100) / 100,
     submitted_at: new Date().toISOString()
   }, { onConflict: 'employee_id,week_starting' });
 
@@ -2328,45 +2292,15 @@ async function submitTimesheet(weekMonday) {
   if (weekEntries.length === 0) return toast('No entries to submit');
 
   const totalHours = weekEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
-
-  // Calculate cost — factoring in entry types and pay policies
-  const emp = WMEAuth.getEmployee();
-  const rate = parseFloat(emp.rate);
-  let totalCost = 0;
-
-  if (emp.rate_type === 'hourly') {
-    weekEntries.forEach(e => {
-      const type = e.entry_type || 'work';
-      const hrs = parseFloat(e.calculated_hours || 0);
-      if (type === 'work' || type === 'half_day_work') totalCost += hrs * rate;
-      else if (type === 'holiday' || type === 'half_day_holiday') totalCost += hrs * rate; // Holiday always paid
-      else if (type === 'sick') totalCost += emp.sick_pay === 'paid' ? hrs * rate : 0;
-      else if (type === 'absent') totalCost += emp.absent_pay === 'paid' ? hrs * rate : 0;
-    });
-  } else if (emp.rate_type === 'daily') {
-    weekEntries.forEach(e => {
-      const type = e.entry_type || 'work';
-      const dayVal = (type === 'half_day_work' || type === 'half_day_holiday') ? rate * 0.5 : rate;
-      if (type === 'work' || type === 'half_day_work') totalCost += dayVal;
-      else if (type === 'holiday' || type === 'half_day_holiday') totalCost += dayVal;
-      else if (type === 'sick') totalCost += emp.sick_pay === 'paid' ? dayVal : 0;
-      else if (type === 'absent') totalCost += emp.absent_pay === 'paid' ? dayVal : 0;
-    });
-  } else if (emp.rate_type === 'salary') {
-    totalCost = rate / 52;
-  }
-
-  // Calculate expense total
   const totalExpenses = await getWeekExpenseTotal(monday);
 
-  // Upsert timesheet
+  // total_hours / total_cost / total_expenses are computed server-side
+  // by the recalc_timesheet_totals trigger. Locals above are only used
+  // for the confirmation screen summary below.
   const { error } = await sb.from('timesheets').upsert({
     employee_id: WMEAuth.getEmployeeId(),
     week_starting: isoDate(monday),
     status: 'Submitted',
-    total_hours: totalHours,
-    total_cost: Math.round(totalCost * 100) / 100,
-    total_expenses: Math.round(totalExpenses * 100) / 100,
     submitted_at: new Date().toISOString()
   }, { onConflict: 'employee_id,week_starting' });
 
@@ -2909,8 +2843,11 @@ let proxyEmployeeId = null;
 let proxyEmployee = null;
 
 async function openProxyEntry() {
-  const { data: emps } = await sb.from('employees')
-    .select('id, display_name, rate_type, rate, sick_pay, absent_pay')
+  // employees_safe omits sensitive pay fields (rate, sick_pay, absent_pay)
+  // so supervisors can populate the dropdown without seeing cost data.
+  // Totals on timesheets are recomputed server-side by a trigger.
+  const { data: emps } = await sb.from('employees_safe')
+    .select('id, display_name, rate_type')
     .eq('active', true)
     .order('last_name')
     .order('first_name');
@@ -2948,7 +2885,7 @@ async function onProxyEmployeeChange() {
   const id = document.getElementById('proxy-employee').value;
   if (!id) { proxyEmployeeId = null; proxyEmployee = null; return; }
   proxyEmployeeId = id;
-  const { data, error } = await sb.from('employees').select('*').eq('id', id).single();
+  const { data, error } = await sb.from('employees_safe').select('*').eq('id', id).single();
   if (error || !data) { toast('Could not load employee'); return; }
   proxyEmployee = data;
   await loadProxyWeek();
@@ -3195,45 +3132,12 @@ async function submitProxyTimesheet() {
   const weekEntries = entries || [];
   if (weekEntries.length === 0) return toast('No entries to submit');
 
-  const totalHours = weekEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
-
-  const rate = parseFloat(proxyEmployee.rate);
-  let totalCost = 0;
-  if (proxyEmployee.rate_type === 'hourly') {
-    weekEntries.forEach(e => {
-      const type = e.entry_type || 'work';
-      const hrs = parseFloat(e.calculated_hours || 0);
-      if (type === 'work' || type === 'half_day_work') totalCost += hrs * rate;
-      else if (type === 'holiday' || type === 'half_day_holiday') totalCost += hrs * rate;
-      else if (type === 'sick') totalCost += proxyEmployee.sick_pay === 'paid' ? hrs * rate : 0;
-      else if (type === 'absent') totalCost += proxyEmployee.absent_pay === 'paid' ? hrs * rate : 0;
-    });
-  } else if (proxyEmployee.rate_type === 'daily') {
-    weekEntries.forEach(e => {
-      const type = e.entry_type || 'work';
-      const dayVal = (type === 'half_day_work' || type === 'half_day_holiday') ? rate * 0.5 : rate;
-      if (type === 'work' || type === 'half_day_work') totalCost += dayVal;
-      else if (type === 'holiday' || type === 'half_day_holiday') totalCost += dayVal;
-      else if (type === 'sick') totalCost += proxyEmployee.sick_pay === 'paid' ? dayVal : 0;
-      else if (type === 'absent') totalCost += proxyEmployee.absent_pay === 'paid' ? dayVal : 0;
-    });
-  } else if (proxyEmployee.rate_type === 'salary') {
-    totalCost = rate / 52;
-  }
-
-  const { data: expData } = await sb.from('expenses')
-    .select('amount')
-    .eq('employee_id', proxyEmployeeId)
-    .eq('week_starting', isoDate(monday));
-  const totalExpenses = (expData || []).reduce((sum, e) => sum + parseFloat(e.amount), 0);
-
+  // total_hours / total_cost / total_expenses are computed server-side
+  // by the recalc_timesheet_totals trigger. Supervisors never see rate data.
   const { error } = await sb.from('timesheets').upsert({
     employee_id: proxyEmployeeId,
     week_starting: isoDate(monday),
     status: 'Submitted',
-    total_hours: totalHours,
-    total_cost: Math.round(totalCost * 100) / 100,
-    total_expenses: Math.round(totalExpenses * 100) / 100,
     submitted_at: new Date().toISOString()
   }, { onConflict: 'employee_id,week_starting' });
 
