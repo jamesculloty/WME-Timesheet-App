@@ -1002,11 +1002,13 @@ async function signOut() { await WMEAuth.signOut(); }
 // ── ADMIN TAB VISIBILITY ────────────────────────────────────
 function isAdmin()   { return WMEAuth.isAdmin(); }
 function isManager() { return WMEAuth.isManager(); }
-function isSupervisor() { return WMEAuth.hasRole('supervisor'); }
+// Office+ (level >= 30) can access the admin screen for proxy time entry.
+// Manager-only tabs (Employees/Approvals/Reports) are gated separately below.
+function canProxyEnter() { return WMEAuth.isOffice(); }
 function isDailyRate() { const emp = WMEAuth.getEmployee(); return emp && emp.rate_type === 'daily'; }
 
 function showAdminTabs() {
-  const show = isSupervisor();
+  const show = canProxyEnter();
   document.getElementById('nav-admin').style.display = show ? '' : 'none';
   const wa = document.getElementById('nav-admin-week');
   if (wa) wa.style.display = show ? '' : 'none';
@@ -2499,9 +2501,9 @@ function showAdminPanel(panel) {
 }
 
 async function loadAdmin() {
-  if (!isSupervisor()) return showScreen('scr-dash');
+  if (!canProxyEnter()) return showScreen('scr-dash');
 
-  // Hide manager-only tabs from supervisors (salaries, approvals, cost reports)
+  // Hide manager-only tabs from non-managers (salaries, approvals, cost reports)
   const mgr = isManager();
   document.getElementById('seg-employees').style.display = mgr ? '' : 'none';
   document.getElementById('seg-approvals').style.display = mgr ? '' : 'none';
@@ -2511,7 +2513,7 @@ async function loadAdmin() {
     showAdminPanelByName('employees');
     await loadEmployeeList();
   } else {
-    // Supervisor sees only Log Time
+    // Office / supervisor see only Log Time (proxy entry)
     showAdminPanelByName('logtime');
   }
 }
