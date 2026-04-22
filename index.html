@@ -317,15 +317,10 @@
         <div class="stat"><div class="stat-n" id="stat-week">—</div><div class="stat-l">Current week</div></div>
       </div>
 
-      <!-- Holiday summary (shown only if the employee has an allowance) -->
+      <!-- Holiday summary (shown only for employees with holiday entitlement) -->
       <div class="card" id="hol-card" style="display:none;margin-bottom:14px">
-        <div class="card-title">Annual Leave (<span id="hol-year"></span>)</div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:13px">
-          <div><div style="color:var(--muted);font-size:12px">Allowance</div><div style="font-weight:700;font-size:18px" id="hol-allowance">0</div></div>
-          <div><div style="color:var(--muted);font-size:12px">Statutory</div><div style="font-weight:700;font-size:18px" id="hol-statutory">0</div></div>
-          <div><div style="color:var(--muted);font-size:12px">Discretionary</div><div style="font-weight:700;font-size:18px" id="hol-discretionary">0</div></div>
-          <div><div style="color:var(--muted);font-size:12px">Remaining</div><div style="font-weight:700;font-size:18px;color:var(--green)" id="hol-remaining">0</div></div>
-        </div>
+        <div class="card-title" id="hol-card-title">Annual Leave (<span id="hol-year"></span>)</div>
+        <div id="hol-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:13px"></div>
         <div id="hol-adjust-row" style="display:none;font-size:12px;color:var(--muted);margin-top:6px">Adjustment by admin: <span id="hol-adjustment">0</span> days (leave taken outside the app)</div>
         <button type="button" id="hol-toggle-btn" onclick="toggleHolidayDates()" style="margin-top:10px;background:none;border:none;color:var(--green);font-size:13px;font-weight:600;cursor:pointer;padding:0">View dates taken ▾</button>
         <div id="hol-dates" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:13px">
@@ -800,8 +795,19 @@
               </select>
             </div>
             <div class="field">
+              <label>Holiday model</label>
+              <select id="emp-holtype" onchange="toggleHolModel('emp')">
+                <option value="fixed">Fixed (allowance)</option>
+                <option value="accrued">Accrued (% of days worked)</option>
+              </select>
+            </div>
+            <div class="field" id="emp-holidays-wrap">
               <label>Holiday (days)</label>
               <input id="emp-holidays" type="number" min="0" value="21" />
+            </div>
+            <div class="field" id="emp-accrual-wrap" style="display:none">
+              <label>Accrual rate (%)</label>
+              <input id="emp-accrual" type="number" min="0" step="0.01" value="12.07" title="Typical UK casual-worker rate is 12.07% (5.6 weeks ÷ 46.4 working weeks)." />
             </div>
             <div class="field">
               <label>Holiday taken outside app (days)</label>
@@ -870,8 +876,19 @@
               </select>
             </div>
             <div class="field">
+              <label>Holiday model</label>
+              <select id="edit-holtype" onchange="toggleHolModel('edit')">
+                <option value="fixed">Fixed (allowance)</option>
+                <option value="accrued">Accrued (% of days worked)</option>
+              </select>
+            </div>
+            <div class="field" id="edit-holidays-wrap">
               <label>Holiday (days)</label>
               <input id="edit-holidays" type="number" min="0" value="21" />
+            </div>
+            <div class="field" id="edit-accrual-wrap" style="display:none">
+              <label>Accrual rate (%)</label>
+              <input id="edit-accrual" type="number" min="0" step="0.01" value="12.07" title="Typical UK casual-worker rate is 12.07% (5.6 weeks ÷ 46.4 working weeks)." />
             </div>
             <div class="field">
               <label>Holiday taken outside app (days)</label>
@@ -1215,6 +1232,12 @@ function onEntryTypeChange() {
   }
 }
 
+function toggleHolModel(prefix) {
+  const type = document.getElementById(prefix + '-holtype').value;
+  document.getElementById(prefix + '-holidays-wrap').style.display = type === 'accrued' ? 'none' : '';
+  document.getElementById(prefix + '-accrual-wrap').style.display  = type === 'accrued' ? '' : 'none';
+}
+
 function toggleHolidayDates() {
   const el = document.getElementById('hol-dates');
   const btn = document.getElementById('hol-toggle-btn');
@@ -1224,24 +1247,28 @@ function toggleHolidayDates() {
 }
 
 async function getHolidaysRemaining(employeeId, employeeRecord) {
-  // Compute the year's holiday usage for an employee.
-  // Defaults to the current user if no args supplied (preserves the existing call sites).
+  // Compute the year's holiday position. Two modes:
+  //   fixed    — allowance minus statutory minus discretionary minus adjustment
+  //   accrued  — (days worked this year × rate) minus taken minus adjustment
   const empId = employeeId || WMEAuth.getEmployeeId();
   const emp = employeeRecord || WMEAuth.getEmployee();
-  const allowance = emp.holiday_allowance ?? 21;
-  const adjustment = emp.holiday_taken_adjustment ?? 0;
+  const type = emp.holiday_type || 'fixed';
+  const adjustment = parseFloat(emp.holiday_taken_adjustment ?? 0);
   const year = new Date().getFullYear();
-  const { data } = await sb.from('time_entries')
+  const yearStart = year + '-01-01';
+  const yearEnd = year + '-12-31';
+
+  // Always fetch holiday entries to list dates and count taken
+  const { data: holEntries } = await sb.from('time_entries')
     .select('entry_type, notes, entry_date')
     .eq('employee_id', empId)
     .in('entry_type', ['holiday', 'half_day_holiday'])
-    .gte('entry_date', year + '-01-01')
-    .lte('entry_date', year + '-12-31');
-  let statutory = 0;
-  let discretionary = 0;
-  const statutoryDates = [];
-  const discretionaryDates = [];
-  (data || []).forEach(e => {
+    .gte('entry_date', yearStart)
+    .lte('entry_date', yearEnd);
+
+  let statutory = 0, discretionary = 0;
+  const statutoryDates = [], discretionaryDates = [];
+  (holEntries || []).forEach(e => {
     const days = e.entry_type === 'half_day_holiday' ? 0.5 : 1;
     const row = { date: e.entry_date, days, type: e.entry_type };
     if ((e.notes || '').startsWith('Statutory')) {
@@ -1254,8 +1281,38 @@ async function getHolidaysRemaining(employeeId, employeeRecord) {
   });
   statutoryDates.sort((a, b) => a.date.localeCompare(b.date));
   discretionaryDates.sort((a, b) => a.date.localeCompare(b.date));
+
+  if (type === 'accrued') {
+    // Count days worked this year (work + 0.5 × half_day_work). Other types don't accrue.
+    const { data: workEntries } = await sb.from('time_entries')
+      .select('entry_type')
+      .eq('employee_id', empId)
+      .in('entry_type', ['work', 'half_day_work'])
+      .gte('entry_date', yearStart)
+      .lte('entry_date', yearEnd);
+    let daysWorked = 0;
+    (workEntries || []).forEach(e => { daysWorked += e.entry_type === 'half_day_work' ? 0.5 : 1; });
+    const rate = parseFloat(emp.holiday_accrual_rate ?? 0.1207);
+    const accrued = Math.round(daysWorked * rate * 100) / 100;
+    const taken = statutory + discretionary;
+    return {
+      type: 'accrued',
+      daysWorked,
+      accrualRate: rate,
+      accrued,
+      taken,
+      adjustment,
+      remaining: Math.round((accrued - taken - adjustment) * 100) / 100,
+      statutoryDates,
+      discretionaryDates
+    };
+  }
+
+  // fixed
+  const allowance = emp.holiday_allowance ?? 21;
   const used = statutory + discretionary;
   return {
+    type: 'fixed',
     allowance,
     statutory,
     discretionary,
@@ -1305,18 +1362,43 @@ async function loadDashboard() {
   document.getElementById('stat-week').textContent = formatWeekRange(monday);
   document.getElementById('stat-week').style.fontSize = '13px';
 
-  // Holiday summary card (only for employees with an allowance)
+  // Holiday summary card — fixed workers show allowance/statutory/discretionary/remaining;
+  // accrued workers (students/casual) show days worked/accrued/taken/remaining.
   const empRec = WMEAuth.getEmployee();
   const holCard = document.getElementById('hol-card');
-  if (empRec && (empRec.holiday_allowance || 0) > 0) {
+  const holType = empRec && empRec.holiday_type || 'fixed';
+  const hasEntitlement = empRec && (
+    (holType === 'fixed' && (empRec.holiday_allowance || 0) > 0) ||
+    (holType === 'accrued')
+  );
+  if (hasEntitlement) {
     const hol = await getHolidaysRemaining();
     holCard.style.display = '';
     document.getElementById('hol-year').textContent = new Date().getFullYear();
-    document.getElementById('hol-allowance').textContent = hol.allowance;
-    document.getElementById('hol-statutory').textContent = hol.statutory;
-    document.getElementById('hol-discretionary').textContent = hol.discretionary;
-    document.getElementById('hol-remaining').textContent = hol.remaining;
-    if (hol.adjustment !== 0) {
+
+    const statCell = (label, value, valueColor) =>
+      `<div><div style="color:var(--muted);font-size:12px">${label}</div>
+       <div style="font-weight:700;font-size:18px${valueColor ? ';color:'+valueColor : ''}">${value}</div></div>`;
+
+    const titleEl = document.getElementById('hol-card-title');
+    const statsEl = document.getElementById('hol-stats');
+    if (hol.type === 'accrued') {
+      titleEl.innerHTML = 'Annual Leave &mdash; Accrued (<span id="hol-year">' + new Date().getFullYear() + '</span>)';
+      statsEl.innerHTML =
+        statCell('Days worked', hol.daysWorked) +
+        statCell('Accrued (' + (hol.accrualRate * 100).toFixed(2) + '%)', hol.accrued) +
+        statCell('Taken', hol.taken) +
+        statCell('Remaining', hol.remaining, 'var(--green)');
+    } else {
+      titleEl.innerHTML = 'Annual Leave (<span id="hol-year">' + new Date().getFullYear() + '</span>)';
+      statsEl.innerHTML =
+        statCell('Allowance', hol.allowance) +
+        statCell('Statutory', hol.statutory) +
+        statCell('Discretionary', hol.discretionary) +
+        statCell('Remaining', hol.remaining, 'var(--green)');
+    }
+
+    if (hol.adjustment && hol.adjustment !== 0) {
       document.getElementById('hol-adjust-row').style.display = '';
       document.getElementById('hol-adjustment').textContent = hol.adjustment;
     } else {
@@ -2856,6 +2938,8 @@ async function addEmployee() {
   const absentPay = document.getElementById('emp-absentpay').value;
   const holidays = parseInt(document.getElementById('emp-holidays').value) || 21;
   const holAdj = parseFloat(document.getElementById('emp-hol-adj').value) || 0;
+  const holType = document.getElementById('emp-holtype').value;
+  const accrualPct = parseFloat(document.getElementById('emp-accrual').value) || 12.07;
 
   if (!first || !last) return toast('Enter first and last name');
 
@@ -2869,8 +2953,10 @@ async function addEmployee() {
     rate,
     sick_pay: sickPay,
     absent_pay: absentPay,
-    holiday_allowance: holidays,
-    holiday_taken_adjustment: holAdj
+    holiday_allowance: holType === 'accrued' ? 0 : holidays,
+    holiday_taken_adjustment: holAdj,
+    holiday_type: holType,
+    holiday_accrual_rate: accrualPct / 100
   });
 
   if (error) return toast('Error: ' + error.message, 4000);
@@ -2901,6 +2987,9 @@ async function editEmployee(id) {
   document.getElementById('edit-absentpay').value = emp.absent_pay || 'unpaid';
   document.getElementById('edit-holidays').value = emp.holiday_allowance ?? 21;
   document.getElementById('edit-hol-adj').value = emp.holiday_taken_adjustment ?? 0;
+  document.getElementById('edit-holtype').value = emp.holiday_type || 'fixed';
+  document.getElementById('edit-accrual').value = ((emp.holiday_accrual_rate ?? 0.1207) * 100).toFixed(2);
+  toggleHolModel('edit');
 
   // Non-admins can't assign admin role
   const adminOpt = document.querySelector('#edit-role option[value="admin"]');
@@ -2923,6 +3012,8 @@ async function saveEditEmployee() {
   const absentPay = document.getElementById('edit-absentpay').value;
   const holidays = parseInt(document.getElementById('edit-holidays').value) || 21;
   const holAdj = parseFloat(document.getElementById('edit-hol-adj').value) || 0;
+  const holType = document.getElementById('edit-holtype').value;
+  const accrualPct = parseFloat(document.getElementById('edit-accrual').value) || 12.07;
 
   if (!first || !last) return toast('First and last name required');
 
@@ -2936,8 +3027,10 @@ async function saveEditEmployee() {
     rate,
     sick_pay: sickPay,
     absent_pay: absentPay,
-    holiday_allowance: holidays,
-    holiday_taken_adjustment: holAdj
+    holiday_allowance: holType === 'accrued' ? 0 : holidays,
+    holiday_taken_adjustment: holAdj,
+    holiday_type: holType,
+    holiday_accrual_rate: accrualPct / 100
   }).eq('id', id);
 
   if (error) return toast('Error: ' + error.message, 4000);
