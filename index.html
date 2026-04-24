@@ -2625,15 +2625,22 @@ async function loadApprovals() {
     let daysHtml = '';
     const dates = getWeekDates(monday);
     const empUniqueDays = new Set((entries || []).map(e => e.entry_date)).size;
+    const describeEntry = (e, daily) => {
+      if (isLeaveType(e.entry_type)) return entryTypeBadge(e.entry_type);
+      const proj = e.project_name ? esc(e.project_name) : '';
+      const half = e.entry_type === 'half_day_work' ? ' ' + entryTypeBadge('half_day_work') : '';
+      if (daily) return proj + half;
+      return proj + ' ' + e.start_time.slice(0,5) + '–' + e.end_time.slice(0,5) + half;
+    };
     dates.forEach((d, i) => {
       const dayEntries = (entries || []).filter(e => e.entry_date === isoDate(d));
       if (dayEntries.length > 0) {
         if (empDaily) {
-          const detail = dayEntries.map(e => esc(e.project_name)).join(', ');
+          const detail = dayEntries.map(e => describeEntry(e, true)).join(', ');
           daysHtml += `<strong>${DAY_NAMES[i]}:</strong> Present — ${detail}<br>`;
         } else {
           const dayHours = dayEntries.reduce((sum, e) => sum + parseFloat(e.calculated_hours || 0), 0);
-          const detail = dayEntries.map(e => esc(e.project_name) + ' ' + e.start_time.slice(0,5) + '–' + e.end_time.slice(0,5)).join(', ');
+          const detail = dayEntries.map(e => describeEntry(e, false)).join(', ');
           daysHtml += `<strong>${DAY_NAMES[i]}:</strong> ${dayHours.toFixed(1)}h — ${detail}<br>`;
         }
       }
