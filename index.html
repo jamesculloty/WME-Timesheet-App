@@ -732,6 +732,7 @@
         <button class="seg-btn active" id="seg-employees" onclick="showAdminPanel('employees')">Employees</button>
         <button class="seg-btn" id="seg-approvals" onclick="showAdminPanel('approvals')">Approvals</button>
         <button class="seg-btn" id="seg-logtime" onclick="showAdminPanel('logtime')">Log Time</button>
+        <button class="seg-btn" id="seg-holidays" onclick="showAdminPanel('holidays')">Holidays</button>
         <button class="seg-btn" id="seg-reports" onclick="showAdminPanel('reports')">Reports</button>
       </div>
 
@@ -926,6 +927,15 @@
           Select an employee and navigate to the day you need to add or edit entries for.
         </div>
         <button class="btn btn-primary" onclick="openProxyEntry()">Open Proxy Entry</button>
+      </div>
+
+      <!-- Holidays panel -->
+      <div id="admin-holidays" style="display:none">
+        <div class="info-box" style="margin-bottom:12px">
+          <strong>Team holidays</strong>
+          Review each person's allowance, statutory + booked days, and adjust where needed. Click "View dates" to see the days recorded.
+        </div>
+        <div id="holidays-list"></div>
       </div>
 
       <!-- Reports panel -->
@@ -2705,7 +2715,8 @@ function showAdminPanel(panel) {
 async function loadAdmin() {
   if (!canProxyEnter()) return showScreen('scr-dash');
 
-  // Hide manager-only tabs from non-managers (salaries, approvals, cost reports)
+  // Hide manager-only tabs from non-managers (salaries, approvals, cost reports).
+  // Holidays + Log Time are office+.
   const mgr = isManager();
   document.getElementById('seg-employees').style.display = mgr ? '' : 'none';
   document.getElementById('seg-approvals').style.display = mgr ? '' : 'none';
@@ -2715,7 +2726,7 @@ async function loadAdmin() {
     showAdminPanelByName('employees');
     await loadEmployeeList();
   } else {
-    // Office / supervisor see only Log Time (proxy entry)
+    // Office / supervisor land on Log Time by default; Holidays tab also available.
     showAdminPanelByName('logtime');
   }
 }
@@ -2727,8 +2738,117 @@ function showAdminPanelByName(panel) {
   document.getElementById('admin-employees').style.display = panel === 'employees' ? '' : 'none';
   document.getElementById('admin-approvals').style.display = panel === 'approvals' ? '' : 'none';
   document.getElementById('admin-logtime').style.display   = panel === 'logtime'   ? '' : 'none';
+  document.getElementById('admin-holidays').style.display  = panel === 'holidays'  ? '' : 'none';
   document.getElementById('admin-reports').style.display   = panel === 'reports'   ? '' : 'none';
-  if (panel === 'reports') initLabourReport();
+  if (panel === 'reports')  initLabourReport();
+  if (panel === 'holidays') loadHolidaysAdmin();
+}
+
+// ── HOLIDAYS ADMIN ───────────────────────────────────────────
+async function loadHolidaysAdmin() {
+  const container = document.getElementById('holidays-list');
+  container.innerHTML = '<div style="color:var(--muted);font-size:13px">Loading…</div>';
+
+  // employees_safe exposes the holiday fields we need without leaking pay data.
+  const { data: emps, error } = await sb.from('employees_safe')
+    .select('id, display_name, role, holiday_type, holiday_allowance, holiday_taken_adjustment, holiday_accrual_rate')
+    .eq('active', true)
+    .order('last_name')
+    .order('first_name');
+  if (error) { container.innerHTML = '<div style="color:var(--danger)">Error: ' + esc(error.message) + '</div>'; return; }
+
+  const results = await Promise.all((emps || []).map(async e => {
+    const hol = await getHolidaysRemaining(e.id, e);
+    return { emp: e, hol };
+  }));
+
+  if (results.length === 0) { container.innerHTML = '<div style="color:var(--muted)">No active employees.</div>'; return; }
+
+  let html = '';
+  results.forEach(({ emp, hol }) => {
+    const isAccrued = hol.type === 'accrued';
+    const allowanceLabel = isAccrued
+      ? `${hol.accrued} accrued (${hol.daysWorked} days × ${(hol.accrualRate * 100).toFixed(2)}%)`
+      : `${hol.allowance} days`;
+    const takenLabel = isAccrued
+      ? `${hol.taken} taken`
+      : `${hol.statutory} statutory + ${hol.discretionary} booked = ${hol.used} used`;
+    const remainingColor = hol.remaining < 0 ? 'var(--danger)' : 'var(--green)';
+
+    html += `<div class="card" id="hol-row-${emp.id}" style="margin-bottom:8px;padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px">
+          <div style="font-weight:600;font-size:14px">${esc(emp.display_name)}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">${esc(emp.role)} · ${isAccrued ? 'Accrued' : 'Fixed'} · ${allowanceLabel}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">${takenLabel}${hol.adjustment ? ` · ${hol.adjustment} adj` : ''}</div>
+        </div>
+        <div style="text-align:right;min-width:110px">
+          <div style="font-size:11px;color:var(--muted);text-transform:uppercase">Remaining</div>
+          <div style="font-size:20px;font-weight:700;color:${remainingColor}">${hol.remaining}</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-outline btn-sm" onclick="toggleHolidayEdit('${emp.id}')">Edit</button>
+          <button class="btn btn-outline btn-sm" onclick="toggleHolidayDatesAdmin('${emp.id}')">View dates</button>
+        </div>
+      </div>
+
+      <div id="hol-edit-${emp.id}" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div class="field">
+            <label>Allowance (days)</label>
+            <input id="hol-allowance-${emp.id}" type="number" min="0" step="0.5" value="${emp.holiday_allowance ?? 0}" ${isAccrued ? 'disabled title="Accrued workers — allowance is computed from days worked"' : ''} />
+          </div>
+          <div class="field">
+            <label>Taken outside app (days)</label>
+            <input id="hol-adj-${emp.id}" type="number" step="0.5" value="${emp.holiday_taken_adjustment ?? 0}" />
+          </div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-primary btn-sm" onclick="saveHolidayFields('${emp.id}')" style="flex:1">Save</button>
+          <button class="btn btn-outline btn-sm" onclick="toggleHolidayEdit('${emp.id}')" style="flex:1">Cancel</button>
+        </div>
+      </div>
+
+      <div id="hol-dates-${emp.id}" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:12px">
+        ${renderHolidayDates(hol)}
+      </div>
+    </div>`;
+  });
+  container.innerHTML = html;
+}
+
+function renderHolidayDates(hol) {
+  const rows = (dates, label) => {
+    if (!dates.length) return '';
+    const lines = dates.map(d => `<div>${formatDateShort(new Date(d.date + 'T00:00:00'))}${d.days === 0.5 ? ' (½)' : ''}</div>`).join('');
+    return `<div style="margin-bottom:6px"><div style="font-weight:600;color:var(--muted);margin-bottom:2px">${label}</div>${lines}</div>`;
+  };
+  const html = rows(hol.statutoryDates || [], 'Statutory') + rows(hol.discretionaryDates || [], 'Booked');
+  return html || '<div style="color:var(--muted)">No holiday entries yet this year.</div>';
+}
+
+function toggleHolidayEdit(empId) {
+  const el = document.getElementById('hol-edit-' + empId);
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+function toggleHolidayDatesAdmin(empId) {
+  const el = document.getElementById('hol-dates-' + empId);
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+async function saveHolidayFields(empId) {
+  const allowance = parseFloat(document.getElementById('hol-allowance-' + empId).value);
+  const adjustment = parseFloat(document.getElementById('hol-adj-' + empId).value);
+  if (isNaN(allowance) || isNaN(adjustment)) return toast('Enter numeric values');
+  const { error } = await sb.rpc('update_employee_holiday_fields', {
+    emp_id: empId,
+    new_allowance: allowance,
+    new_taken_adjustment: adjustment
+  });
+  if (error) return toast('Error: ' + error.message, 4000);
+  toast('Holiday updated');
+  await loadHolidaysAdmin();
 }
 
 // ── LABOUR REPORT ────────────────────────────────────────────
