@@ -800,6 +800,7 @@
               <select id="emp-holtype" onchange="toggleHolModel('emp')">
                 <option value="fixed">Fixed (allowance)</option>
                 <option value="accrued">Accrued (% of days worked)</option>
+                <option value="none">None (no holiday)</option>
               </select>
             </div>
             <div class="field" id="emp-holidays-wrap">
@@ -885,6 +886,7 @@
               <select id="edit-holtype" onchange="toggleHolModel('edit')">
                 <option value="fixed">Fixed (allowance)</option>
                 <option value="accrued">Accrued (% of days worked)</option>
+                <option value="none">None (no holiday)</option>
               </select>
             </div>
             <div class="field" id="edit-holidays-wrap">
@@ -1252,7 +1254,7 @@ function onEntryTypeChange() {
 
 function toggleHolModel(prefix) {
   const type = document.getElementById(prefix + '-holtype').value;
-  document.getElementById(prefix + '-holidays-wrap').style.display = type === 'accrued' ? 'none' : '';
+  document.getElementById(prefix + '-holidays-wrap').style.display = type === 'fixed'   ? '' : 'none';
   document.getElementById(prefix + '-accrual-wrap').style.display  = type === 'accrued' ? '' : 'none';
 }
 
@@ -1275,6 +1277,20 @@ async function getHolidaysRemaining(employeeId, employeeRecord) {
   const year = new Date().getFullYear();
   const yearStart = year + '-01-01';
   const yearEnd = year + '-12-31';
+
+  if (type === 'none') {
+    return {
+      type: 'none',
+      allowance: 0,
+      statutory: 0,
+      discretionary: 0,
+      adjustment,
+      used: 0,
+      remaining: 0,
+      statutoryDates: [],
+      discretionaryDates: []
+    };
+  }
 
   // Always fetch holiday entries to list dates and count taken
   const { data: holEntries } = await sb.from('time_entries')
@@ -2766,21 +2782,26 @@ async function loadHolidaysAdmin() {
 
   let html = '';
   results.forEach(({ emp, hol }) => {
-    const isAccrued = hol.type === 'accrued';
-    const allowanceLabel = isAccrued
+    const modelLabel = hol.type === 'accrued' ? 'Accrued' : hol.type === 'none' ? 'None' : 'Fixed';
+    const allowanceLabel = hol.type === 'accrued'
       ? `${hol.accrued} accrued (${hol.daysWorked} days × ${(hol.accrualRate * 100).toFixed(2)}%)`
-      : `${hol.allowance} days`;
-    const takenLabel = isAccrued
+      : hol.type === 'none'
+        ? 'No entitlement'
+        : `${hol.allowance} days`;
+    const takenLabel = hol.type === 'accrued'
       ? `${hol.taken} taken`
-      : `${hol.statutory} statutory + ${hol.discretionary} booked = ${hol.used} used`;
+      : hol.type === 'none'
+        ? ''
+        : `${hol.statutory} statutory + ${hol.discretionary} booked = ${hol.used} used`;
     const remainingColor = hol.remaining < 0 ? 'var(--danger)' : 'var(--green)';
+    const curType = emp.holiday_type || 'fixed';
 
     html += `<div class="card" id="hol-row-${emp.id}" style="margin-bottom:8px;padding:12px 14px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
         <div style="flex:1;min-width:200px">
           <div style="font-weight:600;font-size:14px">${esc(emp.display_name)}</div>
-          <div style="font-size:12px;color:var(--muted);margin-top:2px">${esc(emp.role)} · ${isAccrued ? 'Accrued' : 'Fixed'} · ${allowanceLabel}</div>
-          <div style="font-size:12px;color:var(--muted);margin-top:2px">${takenLabel}${hol.adjustment ? ` · ${hol.adjustment} adj` : ''}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">${esc(emp.role)} · ${modelLabel} · ${allowanceLabel}</div>
+          ${takenLabel ? `<div style="font-size:12px;color:var(--muted);margin-top:2px">${takenLabel}${hol.adjustment ? ` · ${hol.adjustment} adj` : ''}</div>` : ''}
         </div>
         <div style="text-align:right;min-width:110px">
           <div style="font-size:11px;color:var(--muted);text-transform:uppercase">Remaining</div>
@@ -2788,15 +2809,23 @@ async function loadHolidaysAdmin() {
         </div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-outline btn-sm" onclick="toggleHolidayEdit('${emp.id}')">Edit</button>
-          <button class="btn btn-outline btn-sm" onclick="toggleHolidayDatesAdmin('${emp.id}')">View dates</button>
+          <button class="btn btn-outline btn-sm" onclick="toggleHolidayDatesAdmin('${emp.id}')" ${hol.type === 'none' ? 'disabled style="opacity:0.5"' : ''}>View dates</button>
         </div>
       </div>
 
       <div id="hol-edit-${emp.id}" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
           <div class="field">
+            <label>Holiday model</label>
+            <select id="hol-type-${emp.id}" onchange="onHolidayTypeChange('${emp.id}')">
+              <option value="fixed"   ${curType === 'fixed'   ? 'selected' : ''}>Fixed</option>
+              <option value="accrued" ${curType === 'accrued' ? 'selected' : ''}>Accrued</option>
+              <option value="none"    ${curType === 'none'    ? 'selected' : ''}>None</option>
+            </select>
+          </div>
+          <div class="field" id="hol-allowance-wrap-${emp.id}" style="${curType === 'fixed' ? '' : 'display:none'}">
             <label>Allowance (days)</label>
-            <input id="hol-allowance-${emp.id}" type="number" min="0" step="0.5" value="${emp.holiday_allowance ?? 0}" ${isAccrued ? 'disabled title="Accrued workers — allowance is computed from days worked"' : ''} />
+            <input id="hol-allowance-${emp.id}" type="number" min="0" step="0.5" value="${emp.holiday_allowance ?? 0}" />
           </div>
           <div class="field">
             <label>Taken outside app (days)</label>
@@ -2815,6 +2844,11 @@ async function loadHolidaysAdmin() {
     </div>`;
   });
   container.innerHTML = html;
+}
+
+function onHolidayTypeChange(empId) {
+  const type = document.getElementById('hol-type-' + empId).value;
+  document.getElementById('hol-allowance-wrap-' + empId).style.display = type === 'fixed' ? '' : 'none';
 }
 
 function renderHolidayDates(hol) {
@@ -2838,13 +2872,18 @@ function toggleHolidayDatesAdmin(empId) {
 }
 
 async function saveHolidayFields(empId) {
-  const allowance = parseFloat(document.getElementById('hol-allowance-' + empId).value);
+  const type = document.getElementById('hol-type-' + empId).value;
+  const allowanceEl = document.getElementById('hol-allowance-' + empId);
   const adjustment = parseFloat(document.getElementById('hol-adj-' + empId).value);
-  if (isNaN(allowance) || isNaN(adjustment)) return toast('Enter numeric values');
+  if (isNaN(adjustment)) return toast('Enter a numeric adjustment');
+  // Allowance only editable for fixed; other models store 0.
+  const allowance = type === 'fixed' ? parseFloat(allowanceEl.value) : 0;
+  if (type === 'fixed' && isNaN(allowance)) return toast('Enter an allowance');
   const { error } = await sb.rpc('update_employee_holiday_fields', {
     emp_id: empId,
     new_allowance: allowance,
-    new_taken_adjustment: adjustment
+    new_taken_adjustment: adjustment,
+    new_holiday_type: type
   });
   if (error) return toast('Error: ' + error.message, 4000);
   toast('Holiday updated');
@@ -3111,7 +3150,7 @@ async function addEmployee() {
     rate,
     sick_pay: sickPay,
     absent_pay: absentPay,
-    holiday_allowance: holType === 'accrued' ? 0 : holidays,
+    holiday_allowance: holType === 'fixed' ? holidays : 0,
     holiday_taken_adjustment: holAdj,
     holiday_type: holType,
     holiday_accrual_rate: accrualPct / 100,
@@ -3189,7 +3228,7 @@ async function saveEditEmployee() {
     rate,
     sick_pay: sickPay,
     absent_pay: absentPay,
-    holiday_allowance: holType === 'accrued' ? 0 : holidays,
+    holiday_allowance: holType === 'fixed' ? holidays : 0,
     holiday_taken_adjustment: holAdj,
     holiday_type: holType,
     holiday_accrual_rate: accrualPct / 100,
