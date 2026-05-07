@@ -2899,6 +2899,7 @@ async function saveHolidayFields(empId) {
 
 // ── LABOUR REPORT ────────────────────────────────────────────
 let _lastReportRows = [];
+let _lastUnallocatedRows = [];
 
 function initLabourReport() {
   const to = document.getElementById('rpt-to');
@@ -2932,8 +2933,15 @@ async function runLabourReport() {
     .lte('entry_date', to);
   if (proj) q = q.eq('project_name', proj);
 
-  const { data, error } = await q;
+  const [labourRes, allEntriesRes, empsRes] = await Promise.all([
+    q,
+    sb.from('time_entries').select('employee_id, entry_date, entry_type').gte('entry_date', from).lte('entry_date', to),
+    sb.from('employees').select('id, display_name, role, employment_type').eq('active', true)
+  ]);
+  const { data, error } = labourRes;
   if (error) return toast('Report failed: ' + error.message);
+  const allEntriesForAlloc = allEntriesRes.data || [];
+  const activeEmps = empsRes.data || [];
 
   // Aggregate: project → employee → { hours, days (set of dates), halfDays, cost }
   const byProj = {};
@@ -3007,11 +3015,53 @@ async function runLabourReport() {
   });
   _lastReportRows = rows;
 
+  // Unallocated people: working days (Mon-Fri minus bank holidays) where an active
+  // employee has no time entries of any kind. Half-day work alone counts as 0.5 unalloc.
+  const bankHols = new Set();
+  allEntriesForAlloc.forEach(e => { if (e.entry_type === 'bank_holiday') bankHols.add(e.entry_date); });
+  const workingDays = [];
+  const _start = new Date(from + 'T00:00:00');
+  const _end = new Date(to + 'T00:00:00');
+  for (let d = new Date(_start); d <= _end; d.setDate(d.getDate() + 1)) {
+    const dow = d.getDay();
+    if (dow === 0 || dow === 6) continue;
+    const iso = isoDate(d);
+    if (bankHols.has(iso)) continue;
+    workingDays.push(iso);
+  }
+  const allocByEmp = {};
+  allEntriesForAlloc.forEach(e => {
+    if (!e.employee_id) return;
+    const half = (e.entry_type === 'half_day_work' || e.entry_type === 'half_day_holiday');
+    allocByEmp[e.employee_id] = allocByEmp[e.employee_id] || {};
+    allocByEmp[e.employee_id][e.entry_date] = (allocByEmp[e.employee_id][e.entry_date] || 0) + (half ? 0.5 : 1);
+  });
+  const unallocatedRows = [];
+  activeEmps.forEach(emp => {
+    let unalloc = 0;
+    const dateMap = allocByEmp[emp.id] || {};
+    workingDays.forEach(d => {
+      const a = Math.min(1, dateMap[d] || 0);
+      unalloc += (1 - a);
+    });
+    if (unalloc > 0.0001) {
+      unallocatedRows.push({
+        employee: emp.display_name,
+        role: emp.role || '',
+        employmentType: emp.employment_type || '',
+        unallocatedDays: unalloc,
+        expectedDays: workingDays.length
+      });
+    }
+  });
+  unallocatedRows.sort((a, b) => b.unallocatedDays - a.unallocatedDays);
+  _lastUnallocatedRows = unallocatedRows;
+
   const container = document.getElementById('rpt-results');
   const projList = Object.values(byProj).sort((a, b) => b.hours - a.hours);
 
-  if (projList.length === 0) {
-    container.innerHTML = '<div class="empty"><div class="empty-icon">&#128202;</div><p>No work entries in this range</p></div>';
+  if (projList.length === 0 && unallocatedRows.length === 0) {
+    container.innerHTML = '<div class="empty"><div class="empty-icon">&#128202;</div><p>No entries in this range</p></div>';
     document.getElementById('rpt-csv-btn').style.display = 'none';
     return;
   }
@@ -3022,17 +3072,20 @@ async function runLabourReport() {
   const grandTrue  = projList.reduce((s, p) => s + p.trueCost, 0);
   const empCount   = new Set(rows.map(r => r.employee)).size;
 
-  let html = `<div class="card" style="background:var(--green-lt)">
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-      <strong>${grandHours.toFixed(1)}h</strong>
-      <span>${projList.length} project${projList.length === 1 ? '' : 's'}</span>
-      <span>${empCount} ${empCount === 1 ? 'person' : 'people'}</span>
-      <div style="text-align:right">
-        <div><strong>&pound;${grandTrue.toFixed(2)}</strong> true cost</div>
-        <div style="font-size:11px;color:var(--muted)">&pound;${grandCost.toFixed(2)} gross + &pound;${grandOnc.toFixed(2)} on-costs</div>
+  let html = '';
+  if (projList.length > 0) {
+    html += `<div class="card" style="background:var(--green-lt)">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <strong>${grandHours.toFixed(1)}h</strong>
+        <span>${projList.length} project${projList.length === 1 ? '' : 's'}</span>
+        <span>${empCount} ${empCount === 1 ? 'person' : 'people'}</span>
+        <div style="text-align:right">
+          <div><strong>&pound;${grandTrue.toFixed(2)}</strong> true cost</div>
+          <div style="font-size:11px;color:var(--muted)">&pound;${grandCost.toFixed(2)} gross + &pound;${grandOnc.toFixed(2)} on-costs</div>
+        </div>
       </div>
-    </div>
-  </div>`;
+    </div>`;
+  }
 
   projList.forEach(p => {
     const emps = Object.values(p.emps).sort((a, b) => b.hours - a.hours);
@@ -3060,12 +3113,35 @@ async function runLabourReport() {
     html += `</div>`;
   });
 
+  if (unallocatedRows.length > 0) {
+    html += `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <strong>Unallocated</strong>
+        <div style="text-align:right;font-size:12px;color:var(--muted)">
+          ${unallocatedRows.length} ${unallocatedRows.length === 1 ? 'person' : 'people'} &middot; ${workingDays.length} working day${workingDays.length === 1 ? '' : 's'} in range
+        </div>
+      </div>`;
+    unallocatedRows.forEach(r => {
+      html += `<div class="emp-row" style="font-size:13px">
+        <div style="flex:1">
+          <div>${esc(r.employee)}</div>
+          <div style="color:var(--muted);font-size:11px">${esc(r.role)} &middot; ${esc(r.employmentType)}</div>
+        </div>
+        <div style="text-align:right">
+          <div><strong>${r.unallocatedDays.toFixed(1)}</strong> day${r.unallocatedDays === 1 ? '' : 's'} unallocated</div>
+          <div style="color:var(--muted);font-size:11px">of ${r.expectedDays} expected</div>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
   container.innerHTML = html;
   document.getElementById('rpt-csv-btn').style.display = '';
 }
 
 function exportLabourReportCSV() {
-  if (!_lastReportRows.length) return toast('Run the report first');
+  if (!_lastReportRows.length && !_lastUnallocatedRows.length) return toast('Run the report first');
   const from = document.getElementById('rpt-from').value;
   const to   = document.getElementById('rpt-to').value;
   const header = ['Project', 'Employee', 'Role', 'Rate Type', 'Rate', 'Days', 'Hours', 'Gross Cost', 'On-cost %', 'On-cost', 'True Cost'];
@@ -3085,6 +3161,14 @@ function exportLabourReportCSV() {
         r.oncost.toFixed(2), r.trueCost.toFixed(2)
       ].map(csvCell).join(','));
     });
+  if (_lastUnallocatedRows.length) {
+    lines.push('');
+    lines.push('Unallocated');
+    lines.push(['Employee', 'Role', 'Employment Type', 'Unallocated Days', 'Expected Working Days'].map(csvCell).join(','));
+    _lastUnallocatedRows.forEach(r => {
+      lines.push([r.employee, r.role, r.employmentType, r.unallocatedDays.toFixed(1), r.expectedDays].map(csvCell).join(','));
+    });
+  }
   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
