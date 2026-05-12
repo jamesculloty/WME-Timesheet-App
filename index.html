@@ -947,14 +947,33 @@
       <!-- Reports panel -->
       <div id="admin-reports" style="display:none">
         <div class="card">
-          <div class="card-title">Labour by Project</div>
+          <div class="card-title" id="rpt-card-title">Labour Report</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
             <div class="field"><label>From</label><input type="date" id="rpt-from" /></div>
             <div class="field"><label>To</label><input type="date" id="rpt-to" /></div>
           </div>
           <div class="field">
+            <label>Group by</label>
+            <select id="rpt-groupby" onchange="onRptGroupChange()">
+              <option value="project">Project</option>
+              <option value="employee">Employee</option>
+            </select>
+          </div>
+          <div class="field">
             <label>Project</label>
             <select id="rpt-project"><option value="">All projects</option></select>
+          </div>
+          <div class="field">
+            <label>Employee</label>
+            <select id="rpt-employee"><option value="">All employees</option></select>
+          </div>
+          <div class="field" id="rpt-period-wrap" style="display:none">
+            <label>Sub-group by</label>
+            <select id="rpt-period">
+              <option value="none">Total only</option>
+              <option value="week" selected>Week</option>
+              <option value="month">Month</option>
+            </select>
           </div>
           <div style="display:flex;gap:8px">
             <button class="btn btn-primary" onclick="runLabourReport()" style="flex:1">Run Report</button>
@@ -2904,8 +2923,10 @@ async function saveHolidayFields(empId) {
 // ── LABOUR REPORT ────────────────────────────────────────────
 let _lastReportRows = [];
 let _lastUnallocatedRows = [];
+let _lastReportMode = 'project'; // 'project' | 'employee'
+let _lastEmployeeRows = []; // for the employee-grouped CSV export
 
-function initLabourReport() {
+async function initLabourReport() {
   const to = document.getElementById('rpt-to');
   const from = document.getElementById('rpt-from');
   if (!to.value) {
@@ -2920,22 +2941,42 @@ function initLabourReport() {
       sel.innerHTML += `<option value="${esc(p.name)}">${esc(p.name)}</option>`;
     });
   }
+  const empSel = document.getElementById('rpt-employee');
+  if (empSel && empSel.options.length <= 1) {
+    const { data: emps } = await sb.from('employees')
+      .select('id, display_name').eq('active', true).order('display_name');
+    (emps || []).forEach(e => {
+      empSel.innerHTML += `<option value="${esc(e.id)}">${esc(e.display_name)}</option>`;
+    });
+  }
+  onRptGroupChange();
+}
+
+function onRptGroupChange() {
+  const mode = document.getElementById('rpt-groupby').value;
+  document.getElementById('rpt-period-wrap').style.display = mode === 'employee' ? '' : 'none';
+  document.getElementById('rpt-card-title').textContent =
+    mode === 'employee' ? 'Labour by Employee' : 'Labour by Project';
 }
 
 async function runLabourReport() {
   const from = document.getElementById('rpt-from').value;
   const to   = document.getElementById('rpt-to').value;
   const proj = document.getElementById('rpt-project').value;
+  const empFilter = document.getElementById('rpt-employee').value;
+  const mode = document.getElementById('rpt-groupby').value;
+  _lastReportMode = mode;
   if (!from || !to) return toast('Pick a date range');
   if (from > to)   return toast('From date must be before To date');
 
   let q = sb.from('time_entries')
-    .select('project_name, entry_date, calculated_hours, entry_type, employees!time_entries_employee_id_fkey(id, display_name, role, rate_type, rate, employment_type, employer_oncost_rate)')
+    .select('project_name, entry_date, calculated_hours, entry_type, employee_id, employees!time_entries_employee_id_fkey(id, display_name, role, rate_type, rate, employment_type, employer_oncost_rate)')
     .in('entry_type', WORK_TYPES)
     .not('project_name', 'is', null)
     .gte('entry_date', from)
     .lte('entry_date', to);
   if (proj) q = q.eq('project_name', proj);
+  if (empFilter) q = q.eq('employee_id', empFilter);
 
   const [labourRes, allEntriesRes, empsRes] = await Promise.all([
     q,
@@ -2946,6 +2987,12 @@ async function runLabourReport() {
   if (error) return toast('Report failed: ' + error.message);
   const allEntriesForAlloc = allEntriesRes.data || [];
   const activeEmps = empsRes.data || [];
+
+  // Employee-centric path: same data, different layout (employee → period → project).
+  if (mode === 'employee') {
+    renderEmployeeReport(data || [], document.getElementById('rpt-period').value);
+    return;
+  }
 
   // Aggregate: project → employee → { hours, days (set of dates), halfDays, cost }
   const byProj = {};
@@ -3144,7 +3191,201 @@ async function runLabourReport() {
   document.getElementById('rpt-csv-btn').style.display = '';
 }
 
+// ── Employee-centric report ────────────────────────────────
+// Aggregates the same time_entries data as the project view, but groups by
+// employee then optionally sub-groups by week (Mon-start) or month. Cost
+// calc matches the project view: hourly = hours*rate, daily = full+half days,
+// salary = hours * rate/1820, all with on-cost uplift.
+function renderEmployeeReport(entries, periodMode) {
+  const periodKey = (iso) => {
+    if (periodMode === 'month') return iso.slice(0, 7); // YYYY-MM
+    if (periodMode === 'week') {
+      const d = new Date(iso + 'T00:00:00');
+      const dow = d.getDay();
+      const mon = new Date(d); mon.setDate(d.getDate() - ((dow + 6) % 7));
+      return isoDate(mon);
+    }
+    return 'all';
+  };
+  const periodLabel = (key) => {
+    if (key === 'all') return 'Total';
+    if (periodMode === 'month') {
+      const d = new Date(key + '-01T00:00:00');
+      return d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+    }
+    // week
+    const mon = new Date(key + 'T00:00:00');
+    const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+    return 'Wk ' + mon.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) + ' → ' + sun.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+  };
+
+  // Build empId → { name, role, oncostRate, rateType, rate, periods }
+  const byEmp = {};
+  entries.forEach(e => {
+    const emp = e.employees || {};
+    const empId = emp.id || e.employee_id || 'unknown';
+    const ovr = emp.employer_oncost_rate;
+    const oncostRate = (ovr == null)
+      ? (emp.employment_type === 'employed' ? 0.12 : 0)
+      : parseFloat(ovr);
+    const eb = byEmp[empId] = byEmp[empId] || {
+      empId,
+      name: emp.display_name || 'Unknown',
+      role: emp.role || '',
+      rateType: emp.rate_type || 'hourly',
+      rate: parseFloat(emp.rate || 0),
+      oncostRate,
+      periods: {}
+    };
+    const pk = periodKey(e.entry_date);
+    const per = eb.periods[pk] = eb.periods[pk] || { key: pk, projects: {} };
+    const proj = e.project_name || '(no project)';
+    const pb = per.projects[proj] = per.projects[proj] || { name: proj, hours: 0, dates: new Set(), halfDays: 0 };
+    pb.hours += parseFloat(e.calculated_hours || 0);
+    pb.dates.add(e.entry_date);
+    if (e.entry_type === 'half_day_work') pb.halfDays += 1;
+  });
+
+  // Cost per project bucket (per employee × period × project)
+  const flatRows = [];
+  Object.values(byEmp).forEach(eb => {
+    eb.total = { hours: 0, cost: 0, oncost: 0, trueCost: 0 };
+    Object.values(eb.periods).forEach(per => {
+      per.total = { hours: 0, cost: 0, oncost: 0, trueCost: 0 };
+      Object.values(per.projects).forEach(pb => {
+        const days = pb.dates.size;
+        let cost = 0;
+        if (eb.rateType === 'hourly') {
+          cost = pb.hours * eb.rate;
+        } else if (eb.rateType === 'daily') {
+          const fullDays = days - pb.halfDays;
+          cost = (fullDays * eb.rate) + (pb.halfDays * eb.rate * 0.5);
+        } else if (eb.rateType === 'salary') {
+          cost = pb.hours * (eb.rate / 1820);
+        }
+        const oncost = cost * eb.oncostRate;
+        const trueCost = cost + oncost;
+        pb.days = days;
+        pb.cost = cost; pb.oncost = oncost; pb.trueCost = trueCost;
+        per.total.hours    += pb.hours;
+        per.total.cost     += cost;
+        per.total.oncost   += oncost;
+        per.total.trueCost += trueCost;
+        eb.total.hours    += pb.hours;
+        eb.total.cost     += cost;
+        eb.total.oncost   += oncost;
+        eb.total.trueCost += trueCost;
+        flatRows.push({
+          employee: eb.name, role: eb.role, rateType: eb.rateType, rate: eb.rate,
+          oncostPct: eb.oncostRate * 100, periodLabel: periodLabel(per.key), periodKey: per.key,
+          project: pb.name, days, hours: pb.hours,
+          cost, oncost, trueCost
+        });
+      });
+    });
+  });
+
+  _lastEmployeeRows = flatRows;
+  _lastReportRows = [];      // unused in employee mode (CSV switches on _lastReportMode)
+  _lastUnallocatedRows = []; // unallocated panel is project-view specific
+
+  const empList = Object.values(byEmp).sort((a, b) => b.total.trueCost - a.total.trueCost);
+  const container = document.getElementById('rpt-results');
+  if (empList.length === 0) {
+    container.innerHTML = '<div class="empty"><div class="empty-icon">&#128202;</div><p>No entries in this range</p></div>';
+    document.getElementById('rpt-csv-btn').style.display = 'none';
+    return;
+  }
+
+  const grandHours = empList.reduce((s, e) => s + e.total.hours, 0);
+  const grandTrue  = empList.reduce((s, e) => s + e.total.trueCost, 0);
+  const grandCost  = empList.reduce((s, e) => s + e.total.cost, 0);
+  const grandOnc   = empList.reduce((s, e) => s + e.total.oncost, 0);
+
+  let html = `<div class="card" style="background:var(--green-lt)">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <strong>${grandHours.toFixed(1)}h</strong>
+      <span>${empList.length} ${empList.length === 1 ? 'person' : 'people'}</span>
+      <div style="text-align:right">
+        <div><strong>&pound;${grandTrue.toFixed(2)}</strong> true cost</div>
+        <div style="font-size:11px;color:var(--muted)">&pound;${grandCost.toFixed(2)} gross + &pound;${grandOnc.toFixed(2)} on-costs</div>
+      </div>
+    </div>
+  </div>`;
+
+  empList.forEach(eb => {
+    const periodSort = (a, b) => a.key < b.key ? -1 : 1;
+    const periods = Object.values(eb.periods).sort(periodSort);
+    html += `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <strong>${esc(eb.name)}</strong>
+        <div style="text-align:right;font-size:13px">
+          <div>${eb.total.hours.toFixed(1)}h &middot; <strong>&pound;${eb.total.trueCost.toFixed(2)}</strong></div>
+          <div style="font-size:11px;color:var(--muted)">${esc(eb.role || '')} &middot; ${esc(eb.rateType)} &middot; &pound;${eb.total.cost.toFixed(2)} + &pound;${eb.total.oncost.toFixed(2)} on-cost</div>
+        </div>
+      </div>`;
+    periods.forEach(per => {
+      const projs = Object.values(per.projects).sort((a, b) => b.hours - a.hours);
+      if (periodMode !== 'none') {
+        html += `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:baseline">
+          <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">${esc(periodLabel(per.key))}</div>
+          <div style="font-size:12px;color:var(--muted)">${per.total.hours.toFixed(1)}h &middot; &pound;${per.total.trueCost.toFixed(2)}</div>
+        </div>`;
+      }
+      projs.forEach(pb => {
+        const oncostTxt = pb.oncost > 0 ? ' (+&pound;' + pb.oncost.toFixed(2) + ' on-cost)' : '';
+        html += `<div class="emp-row" style="font-size:13px">
+          <div style="flex:1">
+            <div>${esc(pb.name)}</div>
+            <div style="color:var(--muted);font-size:11px">${pb.days} day${pb.days === 1 ? '' : 's'}</div>
+          </div>
+          <div style="text-align:right">
+            <div>${pb.hours.toFixed(1)}h</div>
+            <div style="color:var(--muted);font-size:11px">&pound;${pb.trueCost.toFixed(2)}${oncostTxt}</div>
+          </div>
+        </div>`;
+      });
+    });
+    html += `</div>`;
+  });
+
+  container.innerHTML = html;
+  document.getElementById('rpt-csv-btn').style.display = '';
+}
+
 function exportLabourReportCSV() {
+  if (_lastReportMode === 'employee') {
+    if (!_lastEmployeeRows.length) return toast('Run the report first');
+    const from = document.getElementById('rpt-from').value;
+    const to   = document.getElementById('rpt-to').value;
+    const header = ['Employee', 'Role', 'Rate Type', 'Rate', 'Period', 'Project', 'Days', 'Hours', 'Gross Cost', 'On-cost %', 'On-cost', 'True Cost'];
+    const csvCell = v => {
+      const s = String(v == null ? '' : v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const lines = [header.join(',')];
+    _lastEmployeeRows
+      .slice()
+      .sort((a, b) => a.employee.localeCompare(b.employee) || a.periodKey.localeCompare(b.periodKey) || b.hours - a.hours)
+      .forEach(r => {
+        lines.push([
+          r.employee, r.role, r.rateType, r.rate.toFixed(2), r.periodLabel,
+          r.project, r.days, r.hours.toFixed(2),
+          r.cost.toFixed(2), r.oncostPct.toFixed(2),
+          r.oncost.toFixed(2), r.trueCost.toFixed(2)
+        ].map(csvCell).join(','));
+      });
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `labour-by-employee_${from}_to_${to}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    return;
+  }
   if (!_lastReportRows.length && !_lastUnallocatedRows.length) return toast('Run the report first');
   const from = document.getElementById('rpt-from').value;
   const to   = document.getElementById('rpt-to').value;
